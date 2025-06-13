@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2018",
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "declaration": true,
+    "emitDeclarationOnly": false,
+    "declarationDir": "./dist/types", // Optional: could just be inside `outDir`
+    "outDir": "./dist",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,             // Avoids 3rd-party type issues slowing you down
+    "resolveJsonModule": true,        // If you ever import JSON
+    "sourceMap": true,                // Useful for debugging if you publish a sourcemap
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["sdk/*"]
+    }
+  },
+  "include": ["sdk"],
+  "exclude": ["dist", "node_modules"]
+}
