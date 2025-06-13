@@ -17,6 +17,6 @@
       "@/*": ["sdk/*"]
     }
   },
-  "include": ["sdk"],
+  "include": ["index.ts","sdk"],
   "exclude": ["dist", "node_modules"]
 }

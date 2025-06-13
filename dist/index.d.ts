@@ -1,1 +1,12 @@
-export * from '../../index'
+export { FlagClient } from './sdk/core/client';
+export type { FlagClientOptions } from './sdk/core/client';
+export type { CacheAdapter, FeatureFlags } from './sdk/core/helpers/types';
+export * as syncCache from './sdk/core/helpers/cacheHelper';
+export * as asyncCache from './sdk/core/helpers/cacheHelper.async';
+export type { Transport } from './sdk/core/transports/Transport';
+export { LongPollingTransport } from './sdk/core/transports/LongPollingTransport';
+export { WebSocketTransport } from './sdk/core/transports/WebsocketTransport';
+export type { FlagValue, EvaluationContext, Segment, Rollout, VariantRollout } from './sdk/core/evaluation/types';
+export { evaluateFlagValue } from './sdk/core/evaluation/evaluateFlagValue';
+export { evaluateRollout } from './sdk/core/evaluation/evaluateRollout';
+export * from './sdk/core/evaluation/rolloutUtils';
