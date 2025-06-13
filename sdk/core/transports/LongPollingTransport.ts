@@ -37,7 +37,7 @@ export class LongPollingTransport<C, T> implements Transport<C, T> {
             },
             body: JSON.stringify({ context }),
         });
-        console.log(res, 'response')
+        console.info(`[LongPollingTransport] Response status: ${res.status}`);
         if (res.status === 401 || res.status === 403) {
             throw new Error('Unauthorized: Invalid API key');
         }
