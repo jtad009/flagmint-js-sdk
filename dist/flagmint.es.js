@@ -1100,18 +1100,20 @@ g0.write = function(h, n, o, s, m, f) {
   }
 })(gr);
 class gu {
-  constructor(n, o, s) {
-    this.endpoint = n, this.apiKey = o, this.context = s, this.isStopped = !1;
+  constructor(n, o, s, m = {}) {
+    this.endpoint = n, this.apiKey = o, this.context = s, this.isStopped = !1, this.pollIntervalMs = m.pollIntervalMs || 2e3;
   }
   init(n) {
     return Ue(this, null, function* () {
-      for (; !this.isStopped; )
+      for (; !this.isStopped; ) {
         try {
           const o = yield this.fetchFlags(this.context);
           n(o);
         } catch (o) {
-          console.error("[LongPollingTransport] poll error", o), yield new Promise((s) => setTimeout(s, 2e3));
+          console.error("[LongPollingTransport] poll error", o);
         }
+        this.pollIntervalMs > 0 && (yield new Promise((o) => setTimeout(o, this.pollIntervalMs)));
+      }
     });
   }
   fetchFlags(n) {
@@ -20188,7 +20190,10 @@ class m3 {
         return yield g.init(), console.log("[FlagClient] WebSocket transport initialized"), g;
       }), m = () => {
         console.log("[FlagClient] Using long polling transport...");
-        const g = new gu(a3, this.apiKey, this.context);
+        const g = new gu(a3, this.apiKey, this.context, {
+          pollIntervalMs: 1e4
+          // Default polling interval
+        });
         return g.init((y) => {
           console.log("[FlagClient] LongPolling update received:", y), this.flags = y, this.enableOfflineCache && Promise.resolve(
             this.cacheAdapter.saveFlags(this.apiKey, y)
