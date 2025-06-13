@@ -1,24 +1,32 @@
 // core/transports/LongPollingTransport.ts
 import type { Transport } from './Transport';
 
+export interface LongPollingOptions {
+  /** Minimum delay (ms) between each poll iteration */
+  pollIntervalMs?: number;
+}
 export class LongPollingTransport<C, T> implements Transport<C, T> {
     private isStopped = false;
-    constructor(private endpoint: string, private apiKey: string, private context: C) { }
+    private pollIntervalMs: number;
+    constructor(private endpoint: string, private apiKey: string, private context: C, options: LongPollingOptions = {}) {
+        this.pollIntervalMs = options.pollIntervalMs || 2000; // Default polling interval
+     }
 
     async init(onUpdate: (flags: Record<string, T>) => void) {
-        // No-op for polling
-        // Start the long‐poll loop
-        while (!this.isStopped) {
-            try {
-                const flags = await this.fetchFlags(this.context);
-                onUpdate(flags);
-            } catch (err) {
-                console.error('[LongPollingTransport] poll error', err);
-                // back off a bit before retrying
-                await new Promise(r => setTimeout(r, 2000));
-            }
-        }
+    while (!this.isStopped) {
+      try {
+        const flags = await this.fetchFlags(this.context);
+        onUpdate(flags);
+      } catch (err) {
+        console.error('[LongPollingTransport] poll error', err);
+      }
+
+      // throttle
+      if (this.pollIntervalMs > 0) {
+        await new Promise(res => setTimeout(res, this.pollIntervalMs));
+      }
     }
+  }
 
     async fetchFlags(context: C): Promise<Record<string, T>> {
         const res = await fetch(this.endpoint, {

@@ -143,7 +143,9 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
   const useLongPolling = (): Transport<C, T> => {
     console.log('[FlagClient] Using long polling transport...');
-    const lp = new LongPollingTransport<C, T>(REST_ENDPOINT, this.apiKey, this.context);
+    const lp = new LongPollingTransport<C, T>(REST_ENDPOINT, this.apiKey, this.context, {
+      pollIntervalMs: 10000, // Default polling interval
+    });
 
     void lp.init((updatedFlags: Record<string, T>) => {
       console.log('[FlagClient] LongPolling update received:', updatedFlags);

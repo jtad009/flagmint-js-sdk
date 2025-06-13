@@ -1,6 +1,6 @@
 {
   "name": "flagmint-js-sdk",
-  "version": "1.0.3",
+  "version": "1.0.5",
   "description": "Framework-agnostic JavaScript SDK for managing feature flags in Flagmint applications.",
   "author": "Flagmint Team",
   "license": "MIT",
@@ -40,5 +40,8 @@
     "typescript": "^5.8.3",
     "vite": "^4.0.0",
     "vite-plugin-dts": "^2.0.0"
+  },
+  "dependencies": {
+    "buffer": "^6.0.3"
   }
 }
