@@ -12,7 +12,7 @@ export default defineConfig({
   },
   build: {
     lib: {
-      entry: path.resolve(__dirname, 'index.ts'),
+      entry: './index.ts',
       name: 'flagmint',
       fileName: (format) => `flagmint.${format}.js`,
       formats: ['es', 'cjs', 'umd']
@@ -28,7 +28,7 @@ export default defineConfig({
     }
   },
   plugins: [
-    dts({ insertTypesEntry: true, tsConfigFilePath: './tsconfig.json' })
+    dts({ insertTypesEntry: true, tsConfigFilePath: './tsconfig.json',  entryRoot: '.' })
   ]
 });
 
