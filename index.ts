@@ -1,5 +1,8 @@
 // src/index.ts
-
+import { Buffer } from 'buffer';
+if (typeof globalThis.Buffer === 'undefined') {
+  globalThis.Buffer = Buffer;
+}
 // Core client
 export { FlagClient } from './sdk/core/client';
 export type { FlagClientOptions } from './sdk/core/client';
