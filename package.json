@@ -1,12 +1,11 @@
 {
   "name": "flagmint-js-sdk",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Framework-agnostic JavaScript SDK for managing feature flags in Flagmint applications.",
   "author": "Flagmint Team",
   "license": "MIT",
   "main": "dist/flagmint.cjs.js",
   "module": "dist/flagmint.es.js",
-  "browser": "dist/flagmint.umd.js",
   "types": "dist/index.d.ts",
   "files": [
     "dist",
