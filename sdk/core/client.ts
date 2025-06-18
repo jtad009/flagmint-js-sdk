@@ -175,14 +175,14 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     }
 
     console.log('[FlagClient] Fetching flags...');
-    const intialData = await this.transport.fetchFlags(this.context);
-    console.log('[FlagClient] Initial flags fetched:', intialData);
+    const initialData = await this.transport.fetchFlags(this.context);
+    console.log('[FlagClient] Initial flags fetched:', initialData);
 
    
-    this.flags = intialData;
+    this.flags = initialData;
     if (this.enableOfflineCache) {
       await Promise.resolve(
-        this.cacheAdapter.saveFlags(this.apiKey, intialData)
+        this.cacheAdapter.saveFlags(this.apiKey, initialData)
       );
     }
 
