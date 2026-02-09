@@ -14,6 +14,8 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
     rawFlags?: Record<string, FlagValue>;
     deferInitialization?: boolean;
     cacheAdapter?: CacheAdapter<C>;
+    restEndpoint?: string;
+    wsEndpoint?: string;
 }
 type FlagUpdateCallback<T> = (flags: FeatureFlags<T>) => void;
 export declare class FlagClient<T = unknown, C extends Record<string, any> = Record<string, any>> {
@@ -25,6 +27,8 @@ export declare class FlagClient<T = unknown, C extends Record<string, any> = Rec
     private persistContext;
     private cacheTTL;
     private transport;
+    private restEndpoint;
+    private wsEndpoint;
     private readyPromise;
     private resolveReady;
     private rejectReady;

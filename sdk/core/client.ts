@@ -20,11 +20,40 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
   rawFlags?: Record<string, FlagValue>;
   deferInitialization?: boolean;
   cacheAdapter?: CacheAdapter<C>;
+  restEndpoint?: string;
+  wsEndpoint?: string;
 }
 
 const DEFAULT_CACHE_TTL = 24 * 60 * 60 * 1000;
-const REST_ENDPOINT = 'http://localhost:3000/evaluator/evaluate';
-const WS_ENDPOINT = 'ws://localhost:8080/ws';
+
+/**
+ * Get default endpoints based on NODE_ENV
+ */
+function getDefaultEndpoints() {
+  const env = typeof process !== 'undefined' ? process.env.NODE_ENV : 'development';
+  
+  switch (env) {
+    case 'production':
+      return {
+        rest: 'https://api.flagmint.com/evaluator/evaluate',
+        ws: 'wss://api.flagmint.com/ws',
+      };
+    case 'staging':
+      return {
+        rest: 'https://staging-api.flagmint.com/evaluator/evaluate',
+        ws: 'wss://staging-api.flagmint.com/ws',
+      };
+    case 'development':
+    default:
+      return {
+        rest: 'http://localhost:3000/evaluator/evaluate',
+        ws: 'ws://localhost:8080/ws',
+      };
+  }
+}
+
+const REST_ENDPOINT = getDefaultEndpoints().rest;
+const WS_ENDPOINT = getDefaultEndpoints().ws;
 
 // Type for subscription callbacks
 type FlagUpdateCallback<T> = (flags: FeatureFlags<T>) => void;
@@ -38,6 +67,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   private persistContext: boolean;
   private cacheTTL: number;
   private transport!: Transport<C, T>;
+  private restEndpoint: string;
+  private wsEndpoint: string;
 
   private readyPromise!: Promise<void>;
   private resolveReady!: () => void;
@@ -60,6 +91,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     this.persistContext = options.persistContext ?? false;
     this.cacheTTL = DEFAULT_CACHE_TTL;
     this.onError = options.onError;
+    this.restEndpoint = options.restEndpoint ?? REST_ENDPOINT;
+    this.wsEndpoint = options.wsEndpoint ?? WS_ENDPOINT;
     this.cacheAdapter = options.cacheAdapter ?? {
       loadFlags: syncCache.loadCachedFlags,
       saveFlags: syncCache.saveCachedFlags,
@@ -135,7 +168,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
     const useWebSocket = async (): Promise<Transport<C, T>> => {
       console.log('[FlagClient] Initializing WebSocket transport...');
-      const ws = new WebSocketTransport<C, T>(WS_ENDPOINT, this.apiKey);
+      const ws = new WebSocketTransport<C, T>(this.wsEndpoint, this.apiKey);
       await ws.init();
       console.log('[FlagClient] WebSocket transport initialized');
       return ws;
@@ -143,7 +176,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
     const useLongPolling = (): Transport<C, T> => {
       console.log('[FlagClient] Using long polling transport...');
-      const lp = new LongPollingTransport<C, T>(REST_ENDPOINT, this.apiKey, this.context, {
+      const lp = new LongPollingTransport<C, T>(this.restEndpoint, this.apiKey, this.context, {
         pollIntervalMs: 10000,
       });
 
