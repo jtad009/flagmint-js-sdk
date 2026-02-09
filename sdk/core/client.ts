@@ -30,7 +30,9 @@ const DEFAULT_CACHE_TTL = 24 * 60 * 60 * 1000;
  * Get default endpoints based on NODE_ENV
  */
 function getDefaultEndpoints() {
-  const env = typeof process !== 'undefined' ? process.env.NODE_ENV : 'development';
+   const env = 
+    (typeof process !== 'undefined' ? (process.env.NEXT_PUBLIC_NODE_ENV || process.env.NODE_ENV) : 'development');
+  
   
   switch (env) {
     case 'production':
