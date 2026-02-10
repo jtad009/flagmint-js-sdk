@@ -49,7 +49,7 @@ function getDefaultEndpoints() {
     default:
       return {
         rest: 'http://localhost:3000/evaluator/evaluate',
-        ws: 'ws://localhost:8080/ws',
+        ws: 'ws://localhost:3000/ws',
       };
   }
 }
@@ -177,15 +177,17 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     };
 
     const useLongPolling = (): Transport<C, T> => {
-      console.log('[FlagClient] Using long polling transport...');
       const lp = new LongPollingTransport<C, T>(this.restEndpoint, this.apiKey, this.context, {
-        pollIntervalMs: 10000,
+        pollIntervalMs: 1200000, 
+        maxBackoffMs: 60000,       // 1min max backoff
+        backoffMultiplier: 2       // Double each time
       });
 
-      void lp.init((updatedFlags: Record<string, T>) => {
-        console.log('[FlagClient] LongPolling update received:', updatedFlags);
-        this.updateFlags(updatedFlags);
+      lp.onFlagsUpdated((flags) => {
+        console.log('[FlagClient] Flags updated via long polling:', flags);
+        this.updateFlags(flags);
       });
+      void lp.init();
 
       return lp;
     };
@@ -212,6 +214,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
       if (typeof this.transport.onFlagsUpdated === 'function') {
         this.transport.onFlagsUpdated((updatedFlags) => {
+          console.log('[FlagClient] Flags updated via transport:', updatedFlags);
           this.updateFlags(updatedFlags);
         });
       }
