@@ -16,9 +16,9 @@ This SDK provides a framework-agnostic client for evaluating feature flags, with
 ## 📦 Installation
 
 ```bash
-npm install flagmint-sdk
+npm install flagmint-js-sdk
 # or
-yarn add flagmint-sdk
+yarn add flagmint-js-sdk
 ```
 
 ## � Quick Start
@@ -29,10 +29,10 @@ import { FlagClient } from 'flagmint-sdk';
 // Create a client instance
 const client = new FlagClient({
   apiKey: 'ff_your_api_key_here',
-  context: { 
-    user_id: 'user123', 
-    country: 'US',
-    isPremium: true
+  context: {
+    kind: "multi | user | organisation",
+    user: { kind: "user", key: '', email: '' },
+    organization: { kind: "organization", key: '', plan: '' }
   }
 });
 
@@ -47,7 +47,7 @@ const featureVersion = client.getFlag('feature_version', 'v1');
 client.updateContext({ user_id: 'user456' });
 ```
 
-## �🛠️ FlagClientOptions
+## FlagClientOptions
 
 | Option                | Type                                      | Default            | Description                                                           |
 | --------------------- | ----------------------------------------- | ------------------ | --------------------------------------------------------------------- |
@@ -172,7 +172,11 @@ import { FlagClient } from 'flagmint-sdk';
 
 const client = new FlagClient({
   apiKey: 'ff_...',
-  context: { userId: 'user123' }
+  context: {
+    kind: "multi | user | organisation",
+    user: { kind: "user", key: '', email: '' },
+    organization: { kind: "organization", key: '', plan: '' }
+  }
 });
 
 export function App() {
