@@ -38,18 +38,18 @@ function getDefaultEndpoints() {
     case 'production':
       return {
         rest: 'https://api.flagmint.com/evaluator/evaluate',
-        ws: 'wss://api.flagmint.com/ws',
+        ws: 'wss://api.flagmint.com/ws/sdk',
       };
     case 'staging':
       return {
         rest: 'https://staging-api.flagmint.com/evaluator/evaluate',
-        ws: 'wss://staging-api.flagmint.com/ws',
+        ws: 'wss://staging-api.flagmint.com/ws/sdk',
       };
     case 'development':
     default:
       return {
         rest: 'http://localhost:3000/evaluator/evaluate',
-        ws: 'ws://localhost:3000/ws',
+        ws: 'ws://localhost:3000/ws/sdk',
       };
   }
 }

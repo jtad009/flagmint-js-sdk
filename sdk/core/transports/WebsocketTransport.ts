@@ -39,16 +39,13 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
   private onConnectionStateCallback?: (state: ConnectionState) => void;
   private retries = 0;
   private reconnectTimeoutId: ReturnType<typeof setTimeout> | null = null;
-  private heartbeatIntervalId: ReturnType<typeof setInterval> | null = null;
-  private lastHeartbeatTime = 0;
-  private readonly heartbeatTimeoutMs = 30000; // 30 seconds
 
   constructor(
     private wsUrl: string,
     private apiKey: string,
     private maxRetries: number = 5,
     private initialBackoffMs: number = 1000
-  ) {}
+  ) { }
 
   async init(): Promise<void> {
     await this.connectWithRetry();
@@ -91,7 +88,7 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
 
           this.setConnectionState('connecting');
           const WebSocketImpl = this.getWebSocketImplementation();
-          
+
           this.socket = new WebSocketImpl(`${this.wsUrl}?apiKey=${this.apiKey}`);
 
           this.socket.onopen = () => {
@@ -99,26 +96,34 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
             this.isReady = true;
             this.retries = 0;
             this.setConnectionState('connected');
-            
+
             if (this.context) {
               this.sendContext(this.context);
             }
-            
-            this.startHeartbeat();
             resolve();
           };
 
           this.socket.onmessage = (event: MessageEvent) => {
-            this.lastHeartbeatTime = Date.now();
-            
+
             try {
               const data = JSON.parse(event.data as string);
-              
-              if (data.type === 'pong') {
-                // Heartbeat response
+              console.log('[WebSocketTransport] Message received:', data);
+              // Respond to ping
+              // ✅ CORRECT - Respond to ping with pong
+              if (data.type === 'ping') {
+                if (this.socket && this.socket.readyState === WebSocketReadyState.OPEN) {
+                  this.socket.send(JSON.stringify({ type: 'pong' }));
+                }
                 return;
               }
-              
+
+              // ✅ CORRECT - Just acknowledge pong received
+              if (data.type === 'pong') {
+                console.log('[WebSocketTransport] Pong received');
+                // Don't send anything back!
+                return;
+              }
+
               if (data.type === 'flags') {
                 console.log('[WebSocketTransport] Flags update received');
                 this.flags = data.flags;
@@ -137,7 +142,6 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
           this.socket.onclose = (event: CloseEvent) => {
             console.log('[WebSocketTransport] Connection closed:', event.code);
             this.isReady = false;
-            this.stopHeartbeat();
             this.setConnectionState('disconnected');
 
             // Auth failure codes
@@ -153,7 +157,7 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
               console.warn(
                 `[WebSocketTransport] Reconnecting in ${delay}ms (attempt ${this.retries + 1})`
               );
-              
+
               this.setConnectionState('reconnecting');
               this.reconnectTimeoutId = setTimeout(connect, delay);
               this.retries++;
@@ -179,39 +183,12 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
       this.socket.onmessage = null;
       this.socket.onerror = null;
       this.socket.onclose = null;
-      
+
       if (this.socket.readyState === WebSocketReadyState.OPEN) {
         this.socket.close();
       }
-      
+
       this.socket = null;
-    }
-  }
-
-  private startHeartbeat() {
-    this.lastHeartbeatTime = Date.now();
-    
-    this.heartbeatIntervalId = setInterval(() => {
-      const now = Date.now();
-      
-      // Check if connection is dead
-      if (now - this.lastHeartbeatTime > this.heartbeatTimeoutMs) {
-        console.warn('[WebSocketTransport] Heartbeat timeout, reconnecting...');
-        this.socket?.close();
-        return;
-      }
-
-      // Send ping
-      if (this.socket?.readyState === WebSocketReadyState.OPEN) {
-        this.socket.send(JSON.stringify({ type: 'ping' }));
-      }
-    }, 10000); // Check every 10s
-  }
-
-  private stopHeartbeat() {
-    if (this.heartbeatIntervalId) {
-      clearInterval(this.heartbeatIntervalId);
-      this.heartbeatIntervalId = null;
     }
   }
 
@@ -223,7 +200,7 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
     if (typeof WebSocket !== 'undefined') {
       return WebSocket as WebSocketConstructor;
     }
-    
+
     try {
       const ws = require('ws');
       return ws.default || ws;
@@ -254,16 +231,14 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
 
   destroy(): void {
     console.log('[WebSocketTransport] Destroying...');
-    
-    this.stopHeartbeat();
-    
+
     if (this.reconnectTimeoutId !== null) {
       clearTimeout(this.reconnectTimeoutId);
       this.reconnectTimeoutId = null;
     }
 
     this.cleanupSocket();
-    
+
     this.flags = {};
     this.context = null;
     this.isReady = false;
