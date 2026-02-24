@@ -79,6 +79,11 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   private previewMode: boolean;
   private rawFlags: Record<string, FlagValue> = {};
   private cacheAdapter: CacheAdapter<C>;
+
+  // NEW: Track if initialization was deferred
+  private deferInitialization: boolean;
+  private initializationOptions?: FlagClientOptions<C>;
+  private isInitialized: boolean = false;
   
   // NEW: Subscription management
   private subscribers: Set<FlagUpdateCallback<T>> = new Set();
@@ -105,6 +110,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     this.context = (options.context || ({} as C));
     this.rawFlags = options.rawFlags ?? {};
     this.previewMode = options.previewMode || false;
+    this.deferInitialization = options.deferInitialization ?? false;
 
     // Local-only evaluation
     if (this.previewMode && this.rawFlags && Object.keys(this.rawFlags).length > 0) {
@@ -112,6 +118,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       this.readyPromise = Promise.resolve();
       this.resolveReady = () => { };
       this.rejectReady = () => { };
+      this.isInitialized = true;
       return;
     } else if (this.previewMode && !this.rawFlags) {
       console.error('[FlagClient] No raw flags provided for preview mode. Defaulting to remote fetch.');
@@ -122,13 +129,31 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       this.rejectReady = reject;
     });
 
-    void this.initialize(options);
+     if (this.deferInitialization) {
+      console.log('[FlagClient] Initialization deferred. Call ready() to initialize.');
+     // Store options for later initialization
+        this.initializationOptions = options;
+        // Don't initialize yet!
+      } else {
+        // Initialize immediately (existing behavior)
+        void this.initialize(options);
+      }
   }
 
   /**
    * Initializes the client by loading cached flags and context, setting up the transport layer.
    */
   private async initialize(options: FlagClientOptions<C>): Promise<void> {
+     if (this.deferInitialization) {
+      console.log('[FlagClient] Initialization deferred. Call ready() to initialize.');
+     // Store options for later initialization
+        this.initializationOptions = options;
+        // Don't initialize yet!
+      } else {
+        // Initialize immediately (existing behavior)
+        void this.initialize(options);
+      }
+
     try {
       // A) Persisted context
       if (this.persistContext) {
@@ -154,6 +179,9 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       await this.setupTransport(options);
 
       // D) Resolve ready
+      this.isInitialized = true;
+      
+      // E) Resolve ready
       this.resolveReady();
     } catch (err) {
       this.rejectReady(err);
@@ -336,7 +364,13 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    * Wait for the client to be ready.
    */
   async ready(): Promise<void> {
-    console.log('[FlagClient] Waiting for client to be ready...', this.readyPromise);
+    console.log('[FlagClient] Waiting for client to be ready...' );
+    
+    // If initialization was deferred and hasn't happened yet, do it now
+    if (this.deferInitialization && !this.isInitialized && this.initializationOptions) {
+      console.log('[FlagClient] Deferred initialization triggered by ready() call');
+      await this.initialize(this.initializationOptions);
+    }
     return this.readyPromise;
   }
 
