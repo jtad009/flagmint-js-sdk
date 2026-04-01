@@ -346,22 +346,27 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
   /**
    * Wait for the client to be ready.
+   * Resolves when: flags are available AND initialization succeeded.
+   * Rejects if: initialization/connection fails (even if cached flags exist).
    */
   async ready(timeoutMs: number = 3000): Promise<void> {
-  logger.log('[FlagClient] 🔍 ready() START');
-  
-  if (this.deferInitialization && !this.isInitialized && this.initializationOptions) {
-    logger.log('[FlagClient] 🔍 About to initialize...');
-    await this.initialize(this.initializationOptions);
-    logger.log('[FlagClient] 🔍 Initialize complete');
+    logger.log('[FlagClient] 🔍 ready() START');
+    
+    if (this.deferInitialization && !this.isInitialized && this.initializationOptions) {
+      logger.log('[FlagClient] 🔍 About to initialize...');
+      await this.initialize(this.initializationOptions);
+      logger.log('[FlagClient] 🔍 Initialize complete');
+    }
+    
+    // Wait for flags to be available (cached or fetched)
+    if (Object.keys(this.flags).length === 0) {
+      await this.waitForFlags(timeoutMs);
+    }
+    
+    // Always wait for initialization to complete
+    // This catches connection/transport errors even if cached flags exist
+    await this.readyPromise;
   }
-  
-  if (Object.keys(this.flags).length > 0) {
-    return;
-  }
-  await this.waitForFlags(timeoutMs);
-  await this.readyPromise;
-}
 
   /**
    * Evaluate flags locally (for preview mode).
@@ -378,33 +383,37 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   }
 
   private waitForFlags(timeoutMs: number): Promise<void> {
-  
-  return new Promise<void>((resolve) => {
-    let resolved = false;
-    
-    const timeout = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;unsubscribe();
-        resolve();
-      }
-    }, timeoutMs);
-    
-    const unsubscribe = this.subscribe((flags) => {
-      
-      if (!resolved && Object.keys(flags).length > 0) {
-        resolved = true;
-        clearTimeout(timeout);
-        unsubscribe();
-        resolve();
-      } else {
-        logger.log('[FlagClient] 📥 Not resolving:', {
-          resolved,
-          flagsLength: Object.keys(flags).length
-        });
-      }
+    return new Promise<void>((resolve) => {
+      let resolved = false;
+      let unsubscribe: (() => void) | undefined;
+
+      const timeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          if (unsubscribe) {
+            unsubscribe();
+          }
+          resolve();
+        }
+      }, timeoutMs);
+
+      unsubscribe = this.subscribe((flags) => {
+        if (!resolved && Object.keys(flags).length > 0) {
+          resolved = true;
+          clearTimeout(timeout);
+          if (unsubscribe) {
+            unsubscribe();
+          }
+          resolve();
+        } else {
+          logger.log('[FlagClient] 📥 Not resolving:', {
+            resolved,
+            flagsLength: Object.keys(flags).length
+          });
+        }
+      });
+
+      logger.log('[FlagClient] 🔍 Subscribe callback registered');
     });
-    
-    logger.log('[FlagClient] 🔍 Subscribe callback registered');
-  });
-}
+  }
 }
