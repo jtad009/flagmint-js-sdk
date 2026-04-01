@@ -1,4 +1,5 @@
 import type { Transport } from './Transport';
+type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'reconnecting' | 'failed';
 export declare class WebSocketTransport<C, T> implements Transport<C, T> {
     private wsUrl;
     private apiKey;
@@ -8,17 +9,23 @@ export declare class WebSocketTransport<C, T> implements Transport<C, T> {
     private flags;
     private context;
     private isReady;
+    private initialFlagsReceived;
+    private initialFlagsPromise;
     private onFlagsUpdatedCallback?;
+    private onConnectionStateCallback?;
     private retries;
+    private reconnectTimeoutId;
     constructor(wsUrl: string, apiKey: string, maxRetries?: number, initialBackoffMs?: number);
     init(): Promise<void>;
-    /**
-     * Attempts to connect to the WebSocket server with retry logic.
-     * If the connection fails, it will retry with exponential backoff.
-     */
+    private waitForInitialFlags;
     private connectWithRetry;
+    private cleanupSocket;
+    private setConnectionState;
+    private getWebSocketImplementation;
     fetchFlags(context: C): Promise<Record<string, T>>;
     onFlagsUpdated(callback: (flags: Record<string, T>) => void): void;
+    onConnectionStateChanged(callback: (state: ConnectionState) => void): void;
     destroy(): void;
     private sendContext;
 }
+export {};

@@ -18,7 +18,8 @@ export { LongPollingTransport } from './sdk/core/transports/LongPollingTransport
 export { WebSocketTransport }   from './sdk/core/transports/WebsocketTransport';
 
 // // Evaluation
-export type { FlagValue, EvaluationContext, Segment, Rollout, VariantRollout } from './sdk/core/evaluation/types';
+export type { FlagValue, EvaluationContext, Segment, Rollout, VariantRollout, VariantOption } from './sdk/core/evaluation/types';
 export { evaluateFlagValue } from './sdk/core/evaluation/evaluateFlagValue';
 export { evaluateRollout }    from './sdk/core/evaluation/evaluateRollout';
+export { isInSegment }        from './sdk/core/evaluation/isInSegment';
 export * from './sdk/core/evaluation/rolloutUtils';
