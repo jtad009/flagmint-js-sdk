@@ -172,14 +172,19 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       // C) Transport setup + first fetch
       await this.setupTransport(options);
 
-      // D) Resolve ready
+      // D) Mark as initialized and resolve
       this.isInitialized = true;
-
-      // E) Resolve ready
       this.resolveReady();
     } catch (err) {
-      this.rejectReady(err);
-      this.onError?.(err as Error);
+      const error = err instanceof Error ? err : new Error(String(err));
+      logger.error('[FlagClient] Initialization failed:', error);
+
+      if (Object.keys(this.flags).length > 0) {
+        logger.warn('[FlagClient] Transport connection failed. Serving cached flags.');
+      }
+
+      this.onError?.(error);
+      this.rejectReady(error);
     }
   }
 
@@ -214,39 +219,28 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       return lp;
     };
 
-    try {
-      if (mode === 'websocket') {
+    if (mode === 'websocket') {
+      this.transport = await useWebSocket();
+    } else if (mode === 'long-polling') {
+      this.transport = useLongPolling();
+    } else {
+      try {
         this.transport = await useWebSocket();
-      } else if (mode === 'long-polling') {
+      } catch (e) {
+        logger.warn('[FlagClient] WebSocket failed, falling back to long polling');
         this.transport = useLongPolling();
-      } else {
-        try {
-          this.transport = await useWebSocket();
-        } catch (e) {
-          logger.warn('[FlagClient] WebSocket failed, falling back to long polling');
-          this.transport = useLongPolling();
-        }
       }
-
-      if (typeof this.transport.onFlagsUpdated === 'function') {
-        this.transport.onFlagsUpdated((updatedFlags) => {
-          logger.log('[FlagClient] Flags updated via transport:', updatedFlags);
-          this.updateFlags(updatedFlags);
-        });
-      }
-      const initialData = await this.transport.fetchFlags(this.context);
-
-      this.updateFlags(initialData);
-
-      this.resolveReady();
-    } catch (err) {
-      logger.error('[FlagClient] setupTransport error:', err);
-      this.rejectReady(err);
-      if (this.onError) {
-        this.onError(err instanceof Error ? err : new Error(String(err)));
-      }
-      throw err;
     }
+
+    if (typeof this.transport.onFlagsUpdated === 'function') {
+      this.transport.onFlagsUpdated((updatedFlags) => {
+        logger.log('[FlagClient] Flags updated via transport:', updatedFlags);
+        this.updateFlags(updatedFlags);
+      });
+    }
+    const initialData = await this.transport.fetchFlags(this.context);
+
+    this.updateFlags(initialData);
   }
 
   /**
