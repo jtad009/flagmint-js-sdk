@@ -21,10 +21,10 @@ npm install flagmint-js-sdk
 yarn add flagmint-js-sdk
 ```
 
-## � Quick Start
+## Quick Start
 
 ```ts
-import { FlagClient } from 'flagmint-sdk';
+import { FlagClient } from 'flagmint-js-sdk';
 
 // Create a client instance
 const client = new FlagClient({
