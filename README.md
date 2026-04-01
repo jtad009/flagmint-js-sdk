@@ -72,10 +72,9 @@ await client.updateContext({
 By default, the SDK uses a **sync** `localStorage`-based helper in browsers or a `Map` in Node.js:
 
 ```ts
-import { FlagClient } from 'flagmint-sdk';
+import { FlagClient, syncCache } from 'flagmint-js-sdk';
 // No setup needed for browser; for Node you can override:
-import { setCacheStorage } from 'flagmint-sdk/core/cacheHelper';
-setCacheStorage({
+syncCache.setCacheStorage({
   getItem:   key => myMap.get(key) ?? null,
   setItem:   (key, val) => myMap.set(key, val),
 });
@@ -86,8 +85,7 @@ setCacheStorage({
 Use the **async** helper for server-side or React Native:
 
 ```ts
-import { FlagClient } from 'flagmint-sdk';
-import * as asyncCache from 'flagmint-sdk/core/cacheHelper.async';
+import { FlagClient, asyncCache } from 'flagmint-js-sdk';
 
 const client = new FlagClient({
   apiKey: '...',
@@ -128,7 +126,7 @@ The SDK includes utilities to evaluate flag targeting rules and rollouts:
 ### `evaluateFlagValue(flag, context)`
 
 ```ts
-import { evaluateFlagValue } from 'flagmint-sdk/core/evaluation';
+import { evaluateFlagValue } from 'flagmint-js-sdk';
 
 const result = evaluateFlagValue(flagValue, userContext);
 ```
@@ -140,7 +138,7 @@ const result = evaluateFlagValue(flagValue, userContext);
 ### `evaluateRollout(rollout, context)`
 
 ```ts
-import { evaluateRollout } from 'flagmint-sdk/core/evaluation';
+import { evaluateRollout } from 'flagmint-js-sdk';
 
 const rolloutValue = evaluateRollout(rolloutConfig, userContext);
 ```
@@ -151,14 +149,14 @@ const rolloutValue = evaluateRollout(rolloutConfig, userContext);
 ### `rolloutUtils`
 
 * `hashToPercentage(value: string): number`
-* `pickVariant(value: string, variants: VariantRollout): T | null`
+* `pickVariant(value: string, variants: VariantOption[]): string | number | boolean | null`
 
 These helpers underpin reliable, deterministic assignment of users to flag variants.
 
 ### `isInSegment(segment, context)`
 
 ```ts
-import { isInSegment } from 'flagmint-sdk/core/evaluation';
+import { isInSegment } from 'flagmint-js-sdk';
 
 const inBetaSegment = isInSegment(betaSegment, userContext);
 ```
@@ -171,7 +169,7 @@ Evaluates whether a user context matches a segment's criteria.
 
 ```tsx
 import { useEffect, useState } from 'react';
-import { FlagClient } from 'flagmint-sdk';
+import { FlagClient } from 'flagmint-js-sdk';
 
 const client = new FlagClient({
   apiKey: 'ff_...',
@@ -215,8 +213,7 @@ export function App() {
 ### Node.js / Express
 
 ```ts
-import { FlagClient } from 'flagmint-sdk';
-import * as asyncCache from 'flagmint-sdk/core/cacheHelper.async';
+import { FlagClient, asyncCache } from 'flagmint-js-sdk';
 
 const client = new FlagClient({
   apiKey: 'ff_...',
@@ -380,7 +377,7 @@ const checkout = client.getFlag('new_checkout', false); // true
 ### Custom Cache Implementations
 
 ```ts
-import { FlagClient } from 'flagmint-sdk';
+import { FlagClient } from 'flagmint-js-sdk';
 import redis from 'redis';
 
 const redisClient = redis.createClient();
