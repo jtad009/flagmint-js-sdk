@@ -17,9 +17,19 @@ export function evaluateFlagValue<T>(
     }
   });
 if (!matchesAll) return null;
- const rolloutResult = flag.rollout
-    ? evaluateRollout<T>(flag.rollout, context)
-    : null;
 
-  return rolloutResult ?? flag.value ?? null;
+  // Handle rollouts
+  if (flag.rollout) {
+    if (flag.rollout.strategy === 'percentage') {
+      // For percentage rollouts: check inclusion, return flag.value if included
+      const isIncluded = evaluateRollout<boolean>(flag.rollout, context);
+      return isIncluded ? (flag.value ?? null) : null;
+    } else {
+      // For variant rollouts: return the variant value directly
+      const rolloutResult = evaluateRollout<T>(flag.rollout, context);
+      return rolloutResult ?? flag.value ?? null;
+    }
+  }
+
+  return flag.value ?? null;
 }

@@ -41,8 +41,10 @@ export interface VariantRollout {
   variants: VariantOption[];
 }
 
-// Empty fallback
-export type EmptyRollout = Record<string, any>; // fallback, could be {}
+// Empty fallback - should not be used in production
+export interface EmptyRollout {
+  strategy?: never;
+}
 
 export type Rollout = PercentageRollout | VariantRollout | EmptyRollout;
 
