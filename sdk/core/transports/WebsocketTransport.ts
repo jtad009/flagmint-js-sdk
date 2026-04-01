@@ -37,6 +37,7 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
   private isReady: boolean = false;
   private initialFlagsReceived = false;
   private initialFlagsPromise: Promise<void> | null = null;
+  private initialFlagsResolve: (() => void) | null = null;
   private onFlagsUpdatedCallback?: (flags: Record<string, T>) => void;
   private onConnectionStateCallback?: (state: ConnectionState) => void;
   private retries = 0;
@@ -62,19 +63,7 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
 
     if (!this.initialFlagsPromise) {
       this.initialFlagsPromise = new Promise((resolve) => {
-        const checkInterval = setInterval(() => {
-          if (this.initialFlagsReceived) {
-            clearInterval(checkInterval);
-            resolve();
-          }
-        }, 50);
-
-        // Timeout after 5 seconds
-        setTimeout(() => {
-          clearInterval(checkInterval);
-          logger.warn('[WebSocketTransport] Initial flags timeout');
-          resolve();
-        }, 5000);
+        this.initialFlagsResolve = resolve;
       });
     }
 
@@ -106,12 +95,11 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
           };
 
           this.socket.onmessage = (event: MessageEvent) => {
-
             try {
               const data = JSON.parse(event.data as string);
               logger.log('[WebSocketTransport] Message received:', data);
-              // Respond to ping
-              // ✅ CORRECT - Respond to ping with pong
+
+              // Respond to ping with pong
               if (data.type === 'ping') {
                 if (this.socket && this.socket.readyState === WebSocketReadyState.OPEN) {
                   this.socket.send(JSON.stringify({ type: 'pong' }));
@@ -119,10 +107,9 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
                 return;
               }
 
-              // ✅ CORRECT - Just acknowledge pong received
+              // Acknowledge pong received
               if (data.type === 'pong') {
                 logger.log('[WebSocketTransport] Pong received');
-                // Don't send anything back!
                 return;
               }
 
@@ -131,6 +118,12 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
                 this.flags = data.flags;
                 this.initialFlagsReceived = true;
                 this.onFlagsUpdatedCallback?.(this.flags);
+
+                // Resolve the waiting promise immediately
+                if (this.initialFlagsResolve) {
+                  this.initialFlagsResolve();
+                  this.initialFlagsResolve = null;
+                }
               }
             } catch (err) {
               logger.warn('[WebSocketTransport] Failed to parse message:', err);
@@ -206,8 +199,6 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
 
     // Node.js environment - use dynamic import or graceful error
     try {
-      // This will be tree-shaken out in browser builds
-      // For Node.js, ws should be installed as a peer dependency
       const ws = typeof require !== 'undefined' ? require('ws') : null;
       if (ws) return ws.default || ws;
       throw new Error('ws package not available');
@@ -257,6 +248,7 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
     this.isReady = false;
     this.initialFlagsReceived = false;
     this.initialFlagsPromise = null;
+    this.initialFlagsResolve = null;
     this.onFlagsUpdatedCallback = undefined;
     this.onConnectionStateCallback = undefined;
     this.retries = 0;
