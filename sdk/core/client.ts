@@ -5,6 +5,7 @@ import { WebSocketTransport } from '@/core/transports/WebsocketTransport';
 import { FlagValue } from '@/core/evaluation/types';
 import { evaluateFlagValue } from '@/core/evaluation/evaluateFlagValue';
 import * as syncCache from '@/core/helpers/cacheHelper';
+import { logger } from '@/core/helpers/logger';
 
 type TransportMode = 'auto' | 'websocket' | 'long-polling';
 
@@ -30,10 +31,8 @@ const DEFAULT_CACHE_TTL = 24 * 60 * 60 * 1000;
  * Get default endpoints based on NODE_ENV
  */
 function getDefaultEndpoints() {
-   const env = 
+  const env =
     (typeof process !== 'undefined' ? (process.env.NEXT_PUBLIC_NODE_ENV || process.env.NODE_ENV) : 'development');
-  
-  
   switch (env) {
     case 'production':
       return {
@@ -84,7 +83,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   private deferInitialization: boolean;
   private initializationOptions?: FlagClientOptions<C>;
   private isInitialized: boolean = false;
-  
+
   // NEW: Subscription management
   private subscribers: Set<FlagUpdateCallback<T>> = new Set();
 
@@ -121,38 +120,33 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       this.isInitialized = true;
       return;
     } else if (this.previewMode && !this.rawFlags) {
-      console.error('[FlagClient] No raw flags provided for preview mode. Defaulting to remote fetch.');
+      logger.error('[FlagClient] No raw flags provided for preview mode. Defaulting to remote fetch.');
     }
 
     this.readyPromise = new Promise<void>((resolve, reject) => {
       this.resolveReady = resolve;
       this.rejectReady = reject;
     });
-
-     if (this.deferInitialization) {
-      console.log('[FlagClient] Initialization deferred. Call ready() to initialize.');
-     // Store options for later initialization
-        this.initializationOptions = options;
-        // Don't initialize yet!
-      } else {
-        // Initialize immediately (existing behavior)
-        void this.initialize(options);
-      }
+    if (this.deferInitialization) {
+      logger.log('[FlagClient] Initialization deferred. Call ready() to initialize.');
+      // Store options for later initialization
+      this.initializationOptions = options;
+      // Don't initialize yet!
+    } else {
+      // Initialize immediately (existing behavior)
+      void this.initialize(options);
+    }
   }
 
   /**
    * Initializes the client by loading cached flags and context, setting up the transport layer.
    */
   private async initialize(options: FlagClientOptions<C>): Promise<void> {
-     if (this.deferInitialization) {
-      console.log('[FlagClient] Initialization deferred. Call ready() to initialize.');
-     // Store options for later initialization
-        this.initializationOptions = options;
-        // Don't initialize yet!
-      } else {
-        // Initialize immediately (existing behavior)
-        void this.initialize(options);
-      }
+    logger.log('[FlagClient] Initialization started with options:', options);
+    if (this.isInitialized) {
+      logger.log('[FlagClient] Already initialized, skipping.');
+      return;
+    }
 
     try {
       // A) Persisted context
@@ -180,7 +174,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
       // D) Resolve ready
       this.isInitialized = true;
-      
+
       // E) Resolve ready
       this.resolveReady();
     } catch (err) {
@@ -193,26 +187,26 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    * Sets up the transport layer for the client.
    */
   private async setupTransport(options: FlagClientOptions<C>): Promise<void> {
-    console.log('[FlagClient] setupTransport() started');
+    logger.log('[FlagClient] setupTransport() started');
     const mode = options.transportMode ?? 'auto';
 
     const useWebSocket = async (): Promise<Transport<C, T>> => {
-      console.log('[FlagClient] Initializing WebSocket transport...');
+      logger.log('[FlagClient] Initializing WebSocket transport...');
       const ws = new WebSocketTransport<C, T>(this.wsEndpoint, this.apiKey);
       await ws.init();
-      console.log('[FlagClient] WebSocket transport initialized');
+      logger.log('[FlagClient] WebSocket transport initialized');
       return ws;
     };
 
     const useLongPolling = (): Transport<C, T> => {
       const lp = new LongPollingTransport<C, T>(this.restEndpoint, this.apiKey, this.context, {
-        pollIntervalMs: 1200000, 
+        pollIntervalMs: 1200000,
         maxBackoffMs: 60000,       // 1min max backoff
         backoffMultiplier: 2       // Double each time
       });
 
       lp.onFlagsUpdated((flags) => {
-        console.log('[FlagClient] Flags updated via long polling:', flags);
+        logger.log('[FlagClient] Flags updated via long polling:', flags);
         this.updateFlags(flags);
       });
       void lp.init();
@@ -229,27 +223,24 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
         try {
           this.transport = await useWebSocket();
         } catch (e) {
-          console.warn('[FlagClient] WebSocket failed, falling back to long polling');
+          logger.warn('[FlagClient] WebSocket failed, falling back to long polling');
           this.transport = useLongPolling();
         }
       }
 
-      console.log('[FlagClient] Fetching flags...');
-      const initialData = await this.transport.fetchFlags(this.context);
-      console.log('[FlagClient] Initial flags fetched:', initialData);
-
-      this.updateFlags(initialData);
-
       if (typeof this.transport.onFlagsUpdated === 'function') {
         this.transport.onFlagsUpdated((updatedFlags) => {
-          console.log('[FlagClient] Flags updated via transport:', updatedFlags);
+          logger.log('[FlagClient] Flags updated via transport:', updatedFlags);
           this.updateFlags(updatedFlags);
         });
       }
+      const initialData = await this.transport.fetchFlags(this.context);
+
+      this.updateFlags(initialData);
 
       this.resolveReady();
     } catch (err) {
-      console.error('[FlagClient] setupTransport error:', err);
+      logger.error('[FlagClient] setupTransport error:', err);
       this.rejectReady(err);
       if (this.onError) {
         this.onError(err instanceof Error ? err : new Error(String(err)));
@@ -284,7 +275,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       try {
         callback(this.flags);
       } catch (error) {
-        console.error('[FlagClient] Error in subscriber callback:', error);
+        logger.error('[FlagClient] Error in subscriber callback:', error);
       }
     });
   }
@@ -296,10 +287,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    */
   subscribe(callback: FlagUpdateCallback<T>): () => void {
     this.subscribers.add(callback);
-    
     // Immediately call with current flags
     callback(this.flags);
-    
     // Return unsubscribe function
     return () => {
       this.subscribers.delete(callback);
@@ -325,7 +314,9 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    */
   async updateContext(context: C): Promise<void> {
     this.context = { ...this.context, ...context };
-    
+    if (this.initializationOptions) {
+      this.initializationOptions.context = this.context; // Ensure context is passed if it was set after construction
+    }
     if (this.persistContext) {
       await Promise.resolve(
         this.cacheAdapter.saveContext(this.apiKey, this.context)
@@ -336,9 +327,14 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     if (this.transport && typeof this.transport.fetchFlags === 'function') {
       try {
         const updatedFlags = await this.transport.fetchFlags(this.context);
-        this.updateFlags(updatedFlags);
+        if (typeof this.transport.onFlagsUpdated === 'function') {
+          this.transport.onFlagsUpdated((updatedFlags) => {
+            logger.log('[FlagClient] Flags updated via transport:', updatedFlags);
+            this.updateFlags(updatedFlags);
+          });
+        }
       } catch (error) {
-        console.error('[FlagClient] Error updating flags after context change:', error);
+        logger.error('[FlagClient] Error updating flags after context change:', error);
         this.onError?.(error as Error);
       }
     }
@@ -351,10 +347,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     if (this.refreshIntervalId) {
       clearInterval(this.refreshIntervalId);
     }
-    
     // Clear all subscribers
     this.subscribers.clear();
-    
     if (this.transport) {
       this.transport.destroy();
     }
@@ -363,16 +357,21 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   /**
    * Wait for the client to be ready.
    */
-  async ready(): Promise<void> {
-    console.log('[FlagClient] Waiting for client to be ready...' );
-    
-    // If initialization was deferred and hasn't happened yet, do it now
-    if (this.deferInitialization && !this.isInitialized && this.initializationOptions) {
-      console.log('[FlagClient] Deferred initialization triggered by ready() call');
-      await this.initialize(this.initializationOptions);
-    }
-    return this.readyPromise;
+  async ready(timeoutMs: number = 3000): Promise<void> {
+  logger.log('[FlagClient] 🔍 ready() START');
+  
+  if (this.deferInitialization && !this.isInitialized && this.initializationOptions) {
+    logger.log('[FlagClient] 🔍 About to initialize...');
+    await this.initialize(this.initializationOptions);
+    logger.log('[FlagClient] 🔍 Initialize complete');
   }
+  
+  if (Object.keys(this.flags).length > 0) {
+    return;
+  }
+  await this.waitForFlags(timeoutMs);
+  await this.readyPromise;
+}
 
   /**
    * Evaluate flags locally (for preview mode).
@@ -387,4 +386,35 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     }
     return result;
   }
+
+  private waitForFlags(timeoutMs: number): Promise<void> {
+  
+  return new Promise<void>((resolve) => {
+    let resolved = false;
+    
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;unsubscribe();
+        resolve();
+      }
+    }, timeoutMs);
+    
+    const unsubscribe = this.subscribe((flags) => {
+      
+      if (!resolved && Object.keys(flags).length > 0) {
+        resolved = true;
+        clearTimeout(timeout);
+        unsubscribe();
+        resolve();
+      } else {
+        logger.log('[FlagClient] 📥 Not resolving:', {
+          resolved,
+          flagsLength: Object.keys(flags).length
+        });
+      }
+    });
+    
+    logger.log('[FlagClient] 🔍 Subscribe callback registered');
+  });
+}
 }

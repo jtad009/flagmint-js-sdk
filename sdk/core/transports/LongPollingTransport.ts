@@ -1,5 +1,7 @@
 // core/transports/LongPollingTransport.ts
 import type { Transport } from './Transport';
+import { ensureContextSource } from '@/core/helpers/ensureContextSource';
+import { logger } from '@/core/helpers/logger';
 
 export interface LongPollingOptions {
   pollIntervalMs?: number;
@@ -37,9 +39,9 @@ export class LongPollingTransport<C, T> implements Transport<C, T> {
     try {
       this.currentFlags = await this.fetchFlags(this.currentContext);
       this.consecutiveErrors = 0; // Reset on success
-      console.log('[LongPollingTransport] Initial fetch complete');
+      logger.log('[LongPollingTransport] Initial fetch complete');
     } catch (err) {
-      console.error('[LongPollingTransport] Initial fetch failed:', err);
+      logger.error('[LongPollingTransport] Initial fetch failed:', err);
       // Continue anyway - will retry in next poll
     }
 
@@ -52,7 +54,7 @@ export class LongPollingTransport<C, T> implements Transport<C, T> {
     // Calculate delay: normal interval + backoff
     const delay = this.pollIntervalMs + this.currentBackoffMs;
     
-    console.log(
+    logger.log(
       `[LongPollingTransport] Next poll in ${delay}ms` +
       (this.currentBackoffMs > 0 ? ` (backoff: ${this.currentBackoffMs}ms)` : '')
     );
@@ -69,19 +71,19 @@ export class LongPollingTransport<C, T> implements Transport<C, T> {
       
       // ✅ SUCCESS: Reset backoff
       if (this.consecutiveErrors > 0) {
-        console.log('[LongPollingTransport] ✅ Recovered from errors');
+        logger.log('[LongPollingTransport] ✅ Recovered from errors');
         this.consecutiveErrors = 0;
         this.currentBackoffMs = 0;
       }
       
       // Check if flags changed
       if (this.flagsChanged(flags)) {
-        console.log('[LongPollingTransport] Flags changed, notifying...');
+        logger.log('[LongPollingTransport] Flags changed, notifying...');
         this.currentFlags = flags;
         this.onUpdateCallback?.(flags);
       }
     } catch (err) {
-      console.error('[LongPollingTransport] ❌ Poll error:', err);
+      logger.error('[LongPollingTransport] ❌ Poll error:', err);
       
       // ⚠️ FAILURE: Apply backoff
       this.consecutiveErrors++;
@@ -102,7 +104,7 @@ export class LongPollingTransport<C, T> implements Transport<C, T> {
       
       this.currentBackoffMs = Math.min(backoff, this.maxBackoffMs);
       
-      console.warn(
+      logger.warn(
         `[LongPollingTransport] Backing off ${this.currentBackoffMs}ms ` +
         `(${this.consecutiveErrors} consecutive errors)`
       );
@@ -115,7 +117,8 @@ export class LongPollingTransport<C, T> implements Transport<C, T> {
   }
 
   async fetchFlags(context: C): Promise<Record<string, T>> {
-    this.currentContext = context;
+    const contextWithSource = ensureContextSource(context);
+    this.currentContext = contextWithSource;
 
     const res = await fetch(this.endpoint, {
       method: 'POST',
@@ -123,7 +126,7 @@ export class LongPollingTransport<C, T> implements Transport<C, T> {
         'x-api-key': this.apiKey,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ context }),
+      body: JSON.stringify({ context: contextWithSource }),
     });
 
     if (res.status === 401 || res.status === 403) {
@@ -143,7 +146,7 @@ export class LongPollingTransport<C, T> implements Transport<C, T> {
   }
 
   destroy(): void {
-    console.log('[LongPollingTransport] Destroying...');
+    logger.log('[LongPollingTransport] Destroying...');
     this.isStopped = true;
     
     if (this.pollTimeoutId !== null) {

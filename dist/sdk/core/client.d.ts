@@ -36,6 +36,9 @@ export declare class FlagClient<T = unknown, C extends Record<string, any> = Rec
     private previewMode;
     private rawFlags;
     private cacheAdapter;
+    private deferInitialization;
+    private initializationOptions?;
+    private isInitialized;
     private subscribers;
     /**
      * Creates a new FlagClient instance.
@@ -84,10 +87,11 @@ export declare class FlagClient<T = unknown, C extends Record<string, any> = Rec
     /**
      * Wait for the client to be ready.
      */
-    ready(): Promise<void>;
+    ready(timeoutMs?: number): Promise<void>;
     /**
      * Evaluate flags locally (for preview mode).
      */
     private evaluateLocally;
+    private waitForFlags;
 }
 export {};

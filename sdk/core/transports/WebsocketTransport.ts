@@ -1,5 +1,7 @@
 // core/transports/WebSocketTransport.ts
 import type { Transport } from './Transport';
+import { ensureContextSource } from '@/core/helpers/ensureContextSource';
+import { logger } from '@/core/helpers/logger';
 
 type WebSocketConstructor = new (url: string, protocols?: string | string[]) => WebSocketLike;
 
@@ -70,7 +72,7 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
         // Timeout after 5 seconds
         setTimeout(() => {
           clearInterval(checkInterval);
-          console.warn('[WebSocketTransport] Initial flags timeout');
+          logger.warn('[WebSocketTransport] Initial flags timeout');
           resolve();
         }, 5000);
       });
@@ -92,7 +94,7 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
           this.socket = new WebSocketImpl(`${this.wsUrl}?apiKey=${this.apiKey}`);
 
           this.socket.onopen = () => {
-            console.log('[WebSocketTransport] Connected');
+            logger.log('[WebSocketTransport] Connected');
             this.isReady = true;
             this.retries = 0;
             this.setConnectionState('connected');
@@ -107,7 +109,7 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
 
             try {
               const data = JSON.parse(event.data as string);
-              console.log('[WebSocketTransport] Message received:', data);
+              logger.log('[WebSocketTransport] Message received:', data);
               // Respond to ping
               // ✅ CORRECT - Respond to ping with pong
               if (data.type === 'ping') {
@@ -119,28 +121,28 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
 
               // ✅ CORRECT - Just acknowledge pong received
               if (data.type === 'pong') {
-                console.log('[WebSocketTransport] Pong received');
+                logger.log('[WebSocketTransport] Pong received');
                 // Don't send anything back!
                 return;
               }
 
               if (data.type === 'flags') {
-                console.log('[WebSocketTransport] Flags update received');
+                logger.log('[WebSocketTransport] Flags update received');
                 this.flags = data.flags;
                 this.initialFlagsReceived = true;
                 this.onFlagsUpdatedCallback?.(this.flags);
               }
             } catch (err) {
-              console.warn('[WebSocketTransport] Failed to parse message:', err);
+              logger.warn('[WebSocketTransport] Failed to parse message:', err);
             }
           };
 
           this.socket.onerror = (err: Event) => {
-            console.error('[WebSocketTransport] Error:', err);
+            logger.error('[WebSocketTransport] Error:', err);
           };
 
           this.socket.onclose = (event: CloseEvent) => {
-            console.log('[WebSocketTransport] Connection closed:', event.code);
+            logger.log('[WebSocketTransport] Connection closed:', event.code);
             this.isReady = false;
             this.setConnectionState('disconnected');
 
@@ -154,7 +156,7 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
             // Retry logic
             if (this.retries < this.maxRetries) {
               const delay = this.initialBackoffMs * Math.pow(2, this.retries);
-              console.warn(
+              logger.warn(
                 `[WebSocketTransport] Reconnecting in ${delay}ms (attempt ${this.retries + 1})`
               );
 
@@ -167,7 +169,7 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
             }
           };
         } catch (err) {
-          console.error('[WebSocketTransport] Failed to create socket:', err);
+          logger.error('[WebSocketTransport] Failed to create socket:', err);
           this.setConnectionState('failed');
           reject(err);
         }
@@ -212,10 +214,16 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
   }
 
   async fetchFlags(context: C): Promise<Record<string, T>> {
-    this.context = context;
+    this.context = ensureContextSource(context);
 
     if (this.isReady && this.socket?.readyState === WebSocketReadyState.OPEN) {
-      this.sendContext(context);
+      this.sendContext(this.context);
+      if (!this.initialFlagsReceived) {
+        await this.waitForInitialFlags();
+      } else {
+        // For subsequent fetches, wait a bit for update
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
     }
 
     return this.flags;
@@ -230,7 +238,7 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
   }
 
   destroy(): void {
-    console.log('[WebSocketTransport] Destroying...');
+    logger.log('[WebSocketTransport] Destroying...');
 
     if (this.reconnectTimeoutId !== null) {
       clearTimeout(this.reconnectTimeoutId);
@@ -251,11 +259,14 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
 
   private sendContext(context: C): void {
     if (!this.socket || this.socket.readyState !== WebSocketReadyState.OPEN) {
-      console.warn('[WebSocketTransport] Socket not ready, cannot send context');
+      logger.warn('[WebSocketTransport] Socket not ready, cannot send context');
       return;
     }
 
-    const payload = JSON.stringify({ type: 'context', context });
+    const payload = JSON.stringify({
+      type: 'context',
+      context: ensureContextSource(context),
+    });
     this.socket.send(payload);
   }
 }
