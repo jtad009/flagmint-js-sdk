@@ -321,12 +321,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     if (this.transport && typeof this.transport.fetchFlags === 'function') {
       try {
         const updatedFlags = await this.transport.fetchFlags(this.context);
-        if (typeof this.transport.onFlagsUpdated === 'function') {
-          this.transport.onFlagsUpdated((updatedFlags) => {
-            logger.log('[FlagClient] Flags updated via transport:', updatedFlags);
-            this.updateFlags(updatedFlags);
-          });
-        }
+        logger.log('[FlagClient] Flags updated after context change:', updatedFlags);
+        this.updateFlags(updatedFlags);
       } catch (error) {
         logger.error('[FlagClient] Error updating flags after context change:', error);
         this.onError?.(error as Error);
