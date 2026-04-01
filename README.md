@@ -155,12 +155,12 @@ const rolloutValue = evaluateRollout(rolloutConfig, userContext);
 
 These helpers underpin reliable, deterministic assignment of users to flag variants.
 
-### `isInSegment(context, segment)`
+### `isInSegment(segment, context)`
 
 ```ts
 import { isInSegment } from 'flagmint-sdk/core/evaluation';
 
-const inBetaSegment = isInSegment(userContext, betaSegment);
+const inBetaSegment = isInSegment(betaSegment, userContext);
 ```
 
 Evaluates whether a user context matches a segment's criteria.
