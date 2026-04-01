@@ -42,7 +42,9 @@
     "vite-plugin-dts": "^2.0.0"
   },
   "dependencies": {
-    "buffer": "^6.0.3",
+    "buffer": "^6.0.3"
+  },
+  "optionalDependencies": {
     "ws": "^8.0.0"
   }
 }

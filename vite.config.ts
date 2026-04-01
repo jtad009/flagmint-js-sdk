@@ -19,9 +19,11 @@ export default defineConfig({
       formats: ['es', 'cjs', 'umd']
     },
     rollupOptions: {
-      external: [], // no need to externalize crypto if we polyfill it
+      external: ['ws'], // Externalize ws for Node.js environments
       output: {
-        globals: { /* no need for crypto here */ }
+        globals: {
+          'ws': 'ws'
+        }
       },
       plugins: [
         polyfillNode()

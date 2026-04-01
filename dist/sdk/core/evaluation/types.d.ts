@@ -24,7 +24,9 @@ export interface VariantRollout {
     salt: string;
     variants: VariantOption[];
 }
-export type EmptyRollout = Record<string, any>;
+export interface EmptyRollout {
+    strategy?: never;
+}
 export type Rollout = PercentageRollout | VariantRollout | EmptyRollout;
 export interface FlagValue<T = unknown> {
     key?: string;

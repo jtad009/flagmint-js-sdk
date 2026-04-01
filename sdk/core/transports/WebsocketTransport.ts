@@ -199,13 +199,18 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
   }
 
   private getWebSocketImplementation(): WebSocketConstructor {
+    // Browser environment
     if (typeof WebSocket !== 'undefined') {
       return WebSocket as WebSocketConstructor;
     }
 
+    // Node.js environment - use dynamic import or graceful error
     try {
-      const ws = require('ws');
-      return ws.default || ws;
+      // This will be tree-shaken out in browser builds
+      // For Node.js, ws should be installed as a peer dependency
+      const ws = typeof require !== 'undefined' ? require('ws') : null;
+      if (ws) return ws.default || ws;
+      throw new Error('ws package not available');
     } catch (err) {
       throw new Error(
         'WebSocket not available. Install "ws" package for Node.js: npm install ws'
