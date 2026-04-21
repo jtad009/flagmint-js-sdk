@@ -180,11 +180,18 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       logger.error('[FlagClient] Initialization failed:', error);
 
       if (Object.keys(this.flags).length > 0) {
-        logger.warn('[FlagClient] Transport connection failed. Serving cached flags.');
+        // Cached flags are available - operate in degraded mode
+        logger.warn('[FlagClient] Transport connection failed. Serving cached flags in degraded mode.');
+        this.isInitialized = true;
+        this.resolveReady();
+        // Notify about degraded mode via error callback
+        this.onError?.(error);
+      } else {
+        // No cached flags available - fail initialization
+        logger.error('[FlagClient] No cached flags available. Initialization failed.');
+        this.onError?.(error);
+        this.rejectReady(error);
       }
-
-      this.onError?.(error);
-      this.rejectReady(error);
     }
   }
 
