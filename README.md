@@ -60,7 +60,7 @@ await client.updateContext({
 | `persistContext`      | `boolean`                                 | `false`            | Persist evaluation context across sessions.                           |                                        |
 | `cacheAdapter`        | `CacheAdapter<C>`                         | Sync `cacheHelper` | Custom cache implementation (see examples).                           |
 | `transportMode`       | `'auto' \| 'websocket' \| 'long-polling'` | `'auto'`           | How to fetch flags: prefer WebSocket, or use long-polling transport.  |
-| `onError`             | `(error: Error) => void`                  | —                  | Callback for transport or initialization errors. Still throws on `ready()` if connection fails. |
+| `onError`             | `(error: Error) => void`                  | —                  | Callback for transport or initialization errors. Called when operating in degraded mode with cached flags. |
 | `previewMode`         | `boolean`                                 | `false`            | Evaluate using `rawFlags` only, bypassing remote fetch.               |
 | `rawFlags`            | `Record<string, FlagValue>`               | —                  | Local-only flag definitions used when `previewMode: true`.            |
 | `deferInitialization` | `boolean`                                 | `false`            | If `true`, client initialization is deferred until you call `ready()`. |
@@ -327,31 +327,39 @@ const client = new FlagClient({
 });
 ```
 
-**Important: Error Handling with Cache**
+**Important: Offline Fallback & Cache Behavior**
 
-When the server is unreachable but cached flags exist:
-- ✅ Cached flags ARE loaded and accessible via `getFlag()`
-- ⚠️ `onError` callback is called with the connection error
-- ❌ `ready()` promise still **rejects** with the error
+The SDK gracefully handles connection failures using cached flags as a fallback:
 
-This means you should handle both:
+**When the server is unreachable:**
+
+| Scenario | `ready()` Promise | Behavior |
+|----------|-------------------|----------|
+| ✅ Cached flags available | Resolves | Operates in degraded mode with cached flags |
+| ❌ No cached flags | Rejects | Initialization fails |
+| ✅ Connected successfully | Resolves | Normal operation with live updates |
+
+**Degraded Mode:** When `ready()` resolves but the connection failed, the `onError` callback is triggered to notify you:
 
 ```ts
 const client = new FlagClient({
   apiKey: '...',
   enableOfflineCache: true,
   onError: (error) => {
-    console.warn('Flagmint connection failed, using cached flags:', error);
+    // Called when operating in degraded mode with cached flags
+    console.warn('⚠️ Degraded mode - using cached flags:', error.message);
+    // Optionally report to monitoring service
   }
 });
 
 try {
   await client.ready();
-  console.log('Connected to Flagmint');
+  // ✅ Resolves successfully even if server is down (when cached flags exist)
+  console.log('Client ready');
+  const feature = client.getFlag('my_feature', false); // Always works
 } catch (error) {
-  console.error('Flagmint unreachable:', error);
-  // Cached flags are still available!
-  const feature = client.getFlag('my_feature', false); // Works!
+  // ❌ Only throws if NO cached flags AND server is unreachable
+  console.error('Completely offline:', error);
 }
 ```
 
