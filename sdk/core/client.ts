@@ -101,8 +101,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     this.cacheTTL = DEFAULT_CACHE_TTL;
     this.onError = options.onError;
     
-    // Compute endpoints based on provided env option or auto-detect
-    const endpoints = getDefaultEndpoints(options.env);
+    // Compute endpoints based on provided env option; if env is not set, use module-level defaults for backward compatibility
+    const endpoints = options.env ? getDefaultEndpoints(options.env) : { rest: DEFAULT_REST_ENDPOINT, ws: DEFAULT_WS_ENDPOINT };
     this.restEndpoint = options.restEndpoint ?? endpoints.rest;
     this.wsEndpoint = options.wsEndpoint ?? endpoints.ws;
     this.cacheAdapter = options.cacheAdapter ?? {
