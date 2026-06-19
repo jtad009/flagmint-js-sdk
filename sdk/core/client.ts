@@ -8,6 +8,7 @@ import * as syncCache from '@/core/helpers/cacheHelper';
 import { logger } from '@/core/helpers/logger';
 
 type TransportMode = 'auto' | 'websocket' | 'long-polling';
+type Environment = 'production' | 'staging' | 'development';
 
 export interface FlagClientOptions<C extends Record<string, any> = Record<string, any>> {
   apiKey: string;
@@ -23,17 +24,17 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
   cacheAdapter?: CacheAdapter<C>;
   restEndpoint?: string;
   wsEndpoint?: string;
+  env?: Environment;
 }
 
 const DEFAULT_CACHE_TTL = 24 * 60 * 60 * 1000;
 
 /**
- * Get default endpoints based on NODE_ENV
+ * Get default endpoints based on environment
  */
-function getDefaultEndpoints() {
-  const env =
-    (typeof process !== 'undefined' ? (process.env.NEXT_PUBLIC_NODE_ENV || process.env.NODE_ENV) : 'development');
-  switch (env) {
+function getDefaultEndpoints(env?: Environment): { rest: string; ws: string } {
+  const resolvedEnv = env || (typeof process !== 'undefined' ? (process.env.NEXT_PUBLIC_NODE_ENV || process.env.NODE_ENV) : 'development');
+  switch (resolvedEnv) {
     case 'production':
       return {
         rest: 'https://api.flagmint.com/evaluator/evaluate',
@@ -53,8 +54,10 @@ function getDefaultEndpoints() {
   }
 }
 
-const REST_ENDPOINT = getDefaultEndpoints().rest;
-const WS_ENDPOINT = getDefaultEndpoints().ws;
+// Note: Default endpoints are computed per-client based on the env option
+// These are kept for backward compatibility if no env is specified
+const DEFAULT_REST_ENDPOINT = getDefaultEndpoints().rest;
+const DEFAULT_WS_ENDPOINT = getDefaultEndpoints().ws;
 
 // Type for subscription callbacks
 type FlagUpdateCallback<T> = (flags: FeatureFlags<T>) => void;
@@ -97,8 +100,11 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     this.persistContext = options.persistContext ?? false;
     this.cacheTTL = DEFAULT_CACHE_TTL;
     this.onError = options.onError;
-    this.restEndpoint = options.restEndpoint ?? REST_ENDPOINT;
-    this.wsEndpoint = options.wsEndpoint ?? WS_ENDPOINT;
+    
+    // Compute endpoints based on provided env option; if env is not set, use module-level defaults for backward compatibility
+    const endpoints = options.env ? getDefaultEndpoints(options.env) : { rest: DEFAULT_REST_ENDPOINT, ws: DEFAULT_WS_ENDPOINT };
+    this.restEndpoint = options.restEndpoint ?? endpoints.rest;
+    this.wsEndpoint = options.wsEndpoint ?? endpoints.ws;
     this.cacheAdapter = options.cacheAdapter ?? {
       loadFlags: syncCache.loadCachedFlags,
       saveFlags: syncCache.saveCachedFlags,
