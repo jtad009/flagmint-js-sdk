@@ -1,8 +1,15 @@
 # Flagmint JavaScript SDK
 
-**Version: 1.2.21**
+**Version: v1.2.24**
 
 This SDK provides a javascript framework-agnostic client for evaluating feature flags, with pluggable caching (sync or async) and transport strategies (WebSocket or long-polling). It's designed for both browser and server-side Node.js environments.
+
+## 📋 Release Notes
+
+### v1.2.24
+- ✨ Add `env` parameter to SDK configuration for explicit environment specification
+- Allows users to pass environment as a variable when NODE_ENV or NEXT_PUBLIC_NODE_ENV cannot be reliably detected
+- Improved environment resolution with fallback to auto-detection
 
 ## ✨ Key Features
 
