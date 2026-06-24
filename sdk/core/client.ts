@@ -6,6 +6,7 @@ import { FlagValue } from '@/core/evaluation/types';
 import { evaluateFlagValue } from '@/core/evaluation/evaluateFlagValue';
 import * as syncCache from '@/core/helpers/cacheHelper';
 import { logger } from '@/core/helpers/logger';
+import { UpdateContextOptionsProps } from './types';
 
 type TransportMode = 'auto' | 'websocket' | 'long-polling';
 type Environment = 'production' | 'staging' | 'development';
@@ -60,7 +61,7 @@ const DEFAULT_REST_ENDPOINT = getDefaultEndpoints().rest;
 const DEFAULT_WS_ENDPOINT = getDefaultEndpoints().ws;
 
 // Type for subscription callbacks
-type FlagUpdateCallback<T> = (flags: FeatureFlags<T>) => void;
+type FlagUpdateCallback<T> = (flags: FeatureFlags<T> | Record<string, FeatureFlags<T>>) => void;
 
 export class FlagClient<T = unknown, C extends Record<string, any> = Record<string, any>> {
   private apiKey: string;
@@ -80,6 +81,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   private onError?: (error: Error) => void;
   private previewMode: boolean;
   private rawFlags: Record<string, FlagValue> = {};
+  private subFlags: Map<string, { flags: FeatureFlags<T>; timeoutId: NodeJS.Timeout }> = new Map();
+  private subFlagsubscribers: Map<string, Set<FlagUpdateCallback<T>>> = new Map();
   private cacheAdapter: CacheAdapter<C>;
 
   // NEW: Track if initialization was deferred
@@ -260,11 +263,16 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    * Updates flags and notifies all subscribers.
    * This is the centralized method for any flag update.
    */
-  private updateFlags(newFlags: FeatureFlags<T>): void {
-    this.flags = newFlags;
+  private updateFlags(newFlags: FeatureFlags<T>, options: UpdateContextOptionsProps = {key: null}): void {
+    if(!options.key) {
+      // No sub-context key, update main flags directly
+      this.flags = newFlags;
+    } else {
+      this.updateSubFlags(options?.key, newFlags, options?.subFlagTTL)
+    }
 
     // Cache the new flags
-    if (this.enableOfflineCache) {
+    if (this.enableOfflineCache && options?.key === null) {
       void Promise.resolve(
         this.cacheAdapter.saveFlags(this.apiKey, newFlags)
       );
@@ -272,6 +280,28 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
     // Notify all subscribers
     this.notifySubscribers();
+  }
+/**
+ * Update the subFlags 
+ * @param subContextKey 
+ * @param newFlags 
+ * @param subFlagTTL 
+ */
+  private updateSubFlags(subContextKey: string, newFlags: FeatureFlags<T>, subFlagTTL: number = 5 * 60 * 1000): void {
+    if(subContextKey && typeof subContextKey === 'string') {
+      // If a sub-context key is provided, we store the flags in a sub-context
+      if(!this.subFlags.has(subContextKey)) {
+        this.subFlags.set(subContextKey, { flags: {} as FeatureFlags<T>, timeoutId: null }); // Initialize sub-context if it doesn't exist
+      }
+      this.subFlags.get(subContextKey)!.flags = newFlags as FeatureFlags<T>; // Store new flags in the sub-context
+      // Set a timeout to remove the sub-context after TTL expires
+      const key = subContextKey;
+      setTimeout(() => {
+        this.subFlags.delete(key);
+        logger.log(`[FlagClient] Sub-context '${key}' expired and removed.`);
+        this.notifySubscribers(); // Notify subscribers after removal
+      }, subFlagTTL); // Default TTL: 5 minutes
+    }
   }
 
   /**
@@ -292,7 +322,23 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    * @param callback - Function to call when flags update
    * @returns Unsubscribe function
    */
-  subscribe(callback: FlagUpdateCallback<T>): () => void {
+  subscribe(callback: FlagUpdateCallback<T>, subContextKey?: string): () => void {
+    if (subContextKey) {
+      if (!this.subFlagsubscribers.has(subContextKey)) {
+        this.subFlagsubscribers.set(subContextKey, new Set());
+      }
+      this.subFlagsubscribers.get(subContextKey)!.add(callback);
+      
+      // immediate call — passes sub-context flags if already resolved, {} if pending
+      const current = this.subFlags.get(subContextKey);
+      callback(current?.flags ?? {} as FeatureFlags<T>);
+      
+      return () => {
+        const set = this.subFlagsubscribers.get(subContextKey);
+        set?.delete(callback);
+        if (set?.size === 0) this.subFlagsubscribers.delete(subContextKey);
+      };
+    }
     this.subscribers.add(callback);
     // Immediately call with current flags
     callback(this.flags);
@@ -305,21 +351,37 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   /**
    * Get all flags.
    */
-  getFlags(): FeatureFlags<T> {
+  getFlags(): FeatureFlags<T> | Record<string, FeatureFlags<T>> {
     return { ...this.flags };
   }
 
   /**
    * Get a single flag value.
+   * @param key - The key of the flag to retrieve
+   * @param fallback - Optional fallback value if the flag is not found
+   * @returns The flag value or the fallback
    */
-  getFlag<K extends keyof FeatureFlags<T>>(key: K, fallback?: FeatureFlags<T>[K]): FeatureFlags<T>[K] {
+  getFlag<K extends keyof FeatureFlags<T>>(key: K, fallback?: FeatureFlags<T>[K], subContextKey?: string): FeatureFlags<T>[K] {
+    if (subContextKey) {
+      const sub = this.subFlags.get(subContextKey);
+      if (sub) {
+        // sub-context exists and hasn't expired — read from it
+        return sub.flags[key] ?? fallback!;
+      }
+      // sub-context was requested but doesn't exist (never set, or expired)
+      return fallback!;
+    }
     return this.flags[key] ?? fallback!;
   }
 
   /**
    * Update the evaluation context.
+   * This will trigger a re-evaluation of flags based on the new context.
+   * @param context - New context to merge with existing context
+   * @param options - Optional sub-context and TTL for temporary context
+   * @returns Promise that resolves when the update is complete
    */
-  async updateContext(context: C): Promise<void> {
+  async updateContext(context: C, options: UpdateContextOptionsProps = {key: null}): Promise<void> {
     this.context = { ...this.context, ...context };
     if (this.initializationOptions) {
       this.initializationOptions.context = this.context; // Ensure context is passed if it was set after construction
@@ -335,7 +397,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       try {
         const updatedFlags = await this.transport.fetchFlags(this.context);
         logger.log('[FlagClient] Flags updated after context change:', updatedFlags);
-        this.updateFlags(updatedFlags);
+        this.updateFlags(updatedFlags, options);
       } catch (error) {
         logger.error('[FlagClient] Error updating flags after context change:', error);
         this.onError?.(error as Error);

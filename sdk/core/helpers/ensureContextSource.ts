@@ -16,7 +16,7 @@ export function ensureContextSource<C>(context: C): C {
       ? sourceFromFlat
       : typeof sourceFromCustom === 'string'
         ? sourceFromCustom
-        : 'API';
+        : 'SDK';
 
   return {
     ...contextRecord,
