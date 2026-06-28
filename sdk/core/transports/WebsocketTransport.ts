@@ -38,6 +38,7 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
   private initialFlagsReceived = false;
   private initialFlagsPromise: Promise<void> | null = null;
   private initialFlagsResolve: (() => void) | null = null;
+  private initialFlagsReject: ((err: Error) => void) | null = null;
   private onFlagsUpdatedCallback?: (flags: Record<string, T>) => void;
   private onConnectionStateCallback?: (state: ConnectionState) => void;
   private retries = 0;
@@ -62,8 +63,9 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
     }
 
     if (!this.initialFlagsPromise) {
-      this.initialFlagsPromise = new Promise((resolve) => {
+      this.initialFlagsPromise = new Promise((resolve, reject) => {
         this.initialFlagsResolve = resolve;
+        this.initialFlagsReject = reject;
       });
     }
 
@@ -139,10 +141,30 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
             this.isReady = false;
             this.setConnectionState('disconnected');
 
-            // Auth failure codes
+            // Terminal close codes — do not retry
             if (event.code === 1008 || event.code === 4001) {
               this.setConnectionState('failed');
-              reject(new Error('Unauthorized: Invalid API key'));
+              const reason = event.reason ?? '';
+              const isRateLimit =
+                reason.toLowerCase().includes('rate limit') ||
+                reason.toLowerCase().includes('too many');
+
+              const err = isRateLimit
+                ? Object.assign(new Error(reason || 'Rate limit exceeded. Please try again later.'), {
+                    code: 'ERR_RATE_LIMITED',
+                    resetTime: reason.match(/after (.+)$/i)?.[1]?.trim(),
+                  })
+                : Object.assign(new Error('Unauthorized: Invalid API key'), { code: 'ERR_AUTH' });
+
+              // If onopen already fired and resolved connectWithRetry, the connectWithRetry
+              // reject() here is a no-op on the settled promise. In that case we must reject
+              // the flags promise so that waitForInitialFlags() — and therefore init() — throws.
+              if (this.initialFlagsReject) {
+                this.initialFlagsReject(err);
+                this.initialFlagsReject = null;
+                this.initialFlagsResolve = null;
+              }
+              reject(err); // no-op if connectWithRetry already resolved, but covers pre-open close
               return;
             }
 
@@ -249,6 +271,7 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
     this.initialFlagsReceived = false;
     this.initialFlagsPromise = null;
     this.initialFlagsResolve = null;
+    this.initialFlagsReject = null;
     this.onFlagsUpdatedCallback = undefined;
     this.onConnectionStateCallback = undefined;
     this.retries = 0;
