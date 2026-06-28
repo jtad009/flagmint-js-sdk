@@ -1,10 +1,19 @@
 # Flagmint JavaScript SDK
 
-**Version: v1.2.24**
+**Version: v1.2.25**
 
 This SDK provides a javascript framework-agnostic client for evaluating feature flags, with pluggable caching (sync or async) and transport strategies (WebSocket or long-polling). It's designed for both browser and server-side Node.js environments.
 
 ## 📋 Release Notes
+
+### v1.2.25
+- 🔇 **Controllable debug logging** — SDK logs are now silent by default; opt in with `logger.setup({ debugLog: true })`. In production, only connection/disconnection messages are ever emitted regardless of the setting.
+- 🔌 **Configurable endpoints** — `restEndpoint` and `wsEndpoint` can now be passed directly in `FlagClientOptions`, overriding the environment-derived defaults. Useful for proxies, staging overrides, or self-hosted deployments.
+- 📡 **`subscribe()` delivers current flags immediately** — the callback is now called synchronously with the current flag state at subscription time, so you never miss the initial value.
+- 🧹 **`destroy()` clears all subscribers** — calling `destroy()` now also clears the subscriber set, preventing stale callbacks from holding references after teardown.
+- 🛡️ **WebSocket auth vs rate-limit error discrimination** — close code `1008`/`4001` now inspects the close reason to distinguish `ERR_AUTH` (invalid API key) from `ERR_RATE_LIMITED` errors. Rate-limit errors include a `resetTime` field parsed from the close reason.
+- 🔗 **`initialFlagsReject` on WebSocket transport** — a post-`onopen` close with a terminal code now correctly rejects the `waitForInitialFlags()` promise (and therefore `init()`), so the error surfaces reliably through `client.ready()` even when the connection opened before the server sent the close frame.
+- 🔔 **`onConnectionStateChanged()` exposed** — consumers can now register a callback to observe WebSocket connection state transitions (`connecting`, `connected`, `disconnected`, `reconnecting`, `failed`).
 
 ### v1.2.24
 - ✨ Add `env` parameter to SDK configuration for explicit environment specification
@@ -64,13 +73,37 @@ await client.updateContext({
 | `apiKey`              | `string`                                  | **Required**       | Your environment API key.                                             |
 | `context`             | `Record<string, any>`                     | `{}`               | Initial evaluation context (e.g. user attributes).                    |
 | `enableOfflineCache`  | `boolean`                                 | `true`              | Enable caching of flags locally.                                      |
-| `persistContext`      | `boolean`                                 | `false`            | Persist evaluation context across sessions.                           |                                        |
+| `persistContext`      | `boolean`                                 | `false`            | Persist evaluation context across sessions.                           |
 | `cacheAdapter`        | `CacheAdapter<C>`                         | Sync `cacheHelper` | Custom cache implementation (see examples).                           |
 | `transportMode`       | `'auto' \| 'websocket' \| 'long-polling'` | `'auto'`           | How to fetch flags: prefer WebSocket, or use long-polling transport.  |
+| `restEndpoint`        | `string`                                  | env-derived        | Override the REST endpoint (useful for proxies or self-hosted setups).|
+| `wsEndpoint`          | `string`                                  | env-derived        | Override the WebSocket endpoint.                                      |
 | `onError`             | `(error: Error) => void`                  | —                  | Callback for transport or initialization errors. Called when operating in degraded mode with cached flags. |
 | `previewMode`         | `boolean`                                 | `false`            | Evaluate using `rawFlags` only, bypassing remote fetch.               |
 | `rawFlags`            | `Record<string, FlagValue>`               | —                  | Local-only flag definitions used when `previewMode: true`.            |
 | `deferInitialization` | `boolean`                                 | `false`            | If `true`, client initialization is deferred until you call `ready()`. |
+
+## 🪵 Debug Logging
+
+By default the SDK is **silent** — no console output in any environment. To enable verbose logging during development, call `logger.setup()` before creating your client:
+
+```ts
+import { logger } from 'flagmint-js-sdk';
+
+logger.setup({ debugLog: true });
+
+const client = new FlagClient({ apiKey: '...' });
+```
+
+In **production** (`NODE_ENV=production`), only connection and disconnection messages are emitted regardless of the `debugLog` setting — all other internal logs are suppressed.
+
+```ts
+// These messages always appear in production:
+// "[WebSocketTransport] Connected"
+// "[WebSocketTransport] Connection closed: 1000"
+
+// All other internal logs require debugLog: true in non-production environments
+```
 
 ## 🔧 Cache Adapters
 
@@ -115,6 +148,32 @@ const client = new FlagClient({
 const client = new FlagClient({
   apiKey: '...',
   transportMode: 'long-polling'
+});
+```
+
+### Custom Endpoints
+
+Override the default environment-derived endpoints — useful for proxies, staging overrides, or self-hosted deployments:
+
+```ts
+const client = new FlagClient({
+  apiKey: '...',
+  restEndpoint: 'https://my-proxy.example.com/evaluator/evaluate',
+  wsEndpoint:   'wss://my-proxy.example.com/ws/sdk',
+});
+```
+
+### WebSocket Connection State
+
+Monitor connection state transitions by accessing the underlying WebSocket transport directly:
+
+```ts
+import { WebSocketTransport } from 'flagmint-js-sdk';
+
+const ws = new WebSocketTransport(wsUrl, apiKey);
+ws.onConnectionStateChanged((state) => {
+  // state: 'connecting' | 'connected' | 'disconnected' | 'reconnecting' | 'failed'
+  console.log('WS state:', state);
 });
 ```
 
@@ -342,7 +401,7 @@ The SDK gracefully handles connection failures using cached flags as a fallback:
 
 | Scenario | `ready()` Promise | Behavior |
 |----------|-------------------|----------|
-| ✅ Cached flags available | Resolves | Operates in degraded mode with cached flags |
+| ✅ Cached flags available | Resolves | Operates in degraded mode with cached flags; `onError` is called |
 | ❌ No cached flags | Rejects | Initialization fails |
 | ✅ Connected successfully | Resolves | Normal operation with live updates |
 
@@ -435,17 +494,17 @@ const client = new FlagClient({
 - `getFlag<K>(key: K, fallback?: T): T` - Get flag value with optional fallback
 - `getFlags(): FeatureFlags<T>` - Get all flags as an object
 - `updateContext(context: Record<string, any>): Promise<void>` - Update evaluation context (async)
-- `subscribe(callback: (flags) => void): () => void` - Subscribe to flag updates, returns unsubscribe function
-- `destroy(): void` - Close transport connection and cleanup resources
+- `subscribe(callback: (flags) => void): () => void` - Subscribe to flag updates; fires immediately with current flags, returns unsubscribe function
+- `destroy(): void` - Close transport connection, clear all subscribers, and release resources
 
 ### Subscribing to Flag Updates
 
-Instead of event listeners, use the `subscribe()` method:
+Instead of event listeners, use the `subscribe()` method. The callback is called **immediately** with the current flag state at subscription time, then again on every subsequent update:
 
 ```ts
 const unsubscribe = client.subscribe((flags) => {
   console.log('Flags updated:', flags);
-  // Handle flag updates
+  // Also fires immediately with current flags — no need to call getFlags() separately
 });
 
 // Later, to unsubscribe:
@@ -509,11 +568,9 @@ sdk/
 
 **Important**: When `enableOfflineCache: true` (default):
 - Cached flags are loaded even if the server is unreachable
-- `ready()` will still throw an error on connection failure
-- You can still access cached flags via `getFlag()` after catching the error
-- Consider wrapping `ready()` in try/catch and continuing with cached data
-
-See the "Error Handling with Cache" section above for examples.
+- `ready()` **resolves** (does not throw) if cached flags are available — the `onError` callback is invoked instead to signal degraded mode
+- `ready()` only rejects if **no cached flags exist** and the server is unreachable
+- You can safely call `getFlag()` after `ready()` resolves, regardless of whether the connection succeeded
 
 ### Performance issues
 
@@ -541,6 +598,6 @@ See [GitHub Releases](https://github.com/flagmint/js-sdk/releases) for the compl
 
 ---
 
-**License**: MIT © Flagmint Team
+**License**: BSD 3-Clause License © Flagmint Team
 
 **Maintained with ❤️ by the Flagmint Team**

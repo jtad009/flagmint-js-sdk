@@ -27,12 +27,12 @@ function getEnvironment(): Environment {
 /**
  * Check if logging is allowed based on environment and message
  */
-function shouldLog(message: string, level: LogLevel): boolean {
+function shouldLog(message: string, level: LogLevel, canDebug: boolean): boolean {
   const env = getEnvironment();
 
   // Allow all logging in non-production environments
   const allowedEnvs = ['staging', 'sandbox', 'acceptance', 'local', 'testing', 'development'];
-  if (allowedEnvs.includes(env)) {
+  if (allowedEnvs.includes(env) && canDebug) {
     return true;
   }
 
@@ -46,39 +46,47 @@ function shouldLog(message: string, level: LogLevel): boolean {
   }
 
   // Default: allow logging
-  return true;
+  return canDebug ?  true : false;
 }
 
 /**
  * Environment-aware logger that respects production restrictions
  */
 export const logger = {
+  canDebugLog : false,
+  setup: (options: { debugLog?: boolean }) => {
+    if (options.debugLog) {
+      logger.canDebugLog = options.debugLog
+    } else {
+      logger.canDebugLog = false;
+    }
+  },
   log: (message: string, ...args: any[]) => {
-    if (shouldLog(message, 'log')) {
+    if (shouldLog(message, 'log', logger.canDebugLog)) {
       console.log(message, ...args);
     }
   },
 
   error: (message: string, ...args: any[]) => {
-    if (shouldLog(message, 'error')) {
+    if (shouldLog(message, 'error', logger.canDebugLog)) {
       console.error(message, ...args);
     }
   },
 
   warn: (message: string, ...args: any[]) => {
-    if (shouldLog(message, 'warn')) {
+    if (shouldLog(message, 'warn', logger.canDebugLog)) {
       console.warn(message, ...args);
     }
   },
 
   info: (message: string, ...args: any[]) => {
-    if (shouldLog(message, 'info')) {
+    if (shouldLog(message, 'info', logger.canDebugLog)) {
       console.info(message, ...args);
     }
   },
 
   debug: (message: string, ...args: any[]) => {
-    if (shouldLog(message, 'debug')) {
+    if (shouldLog(message, 'debug', logger.canDebugLog)) {
       console.debug(message, ...args);
     }
   },

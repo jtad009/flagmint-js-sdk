@@ -8,7 +8,6 @@ import * as syncCache from '@/core/helpers/cacheHelper';
 import { logger } from '@/core/helpers/logger';
 
 type TransportMode = 'auto' | 'websocket' | 'long-polling';
-type Environment = 'production' | 'staging' | 'development';
 
 export interface FlagClientOptions<C extends Record<string, any> = Record<string, any>> {
   apiKey: string;
@@ -17,6 +16,19 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
   persistContext?: boolean;
   transport?: Transport<C, any>;
   transportMode?: TransportMode;
+  /**
+   * Called when a non-fatal but noteworthy error occurs during or after initialization.
+   * The client always resolves ready() regardless — use this to show a degraded/fallback UI.
+   *
+   * Common cases:
+   *  - Auth failure (err.code === 'ERR_AUTH'): API key invalid; flags will be empty; getFlag() returns fallback values.
+   *  - Rate limited (err.code === 'ERR_RATE_LIMITED'): free-tier call limit exceeded; cached flags are served if available.
+   *    Check (err as any).resetTime for the reset timestamp string supplied by the server, if present.
+   *  - Degraded mode: transport failed but cached flags are available and being served.
+   *  - Context update error: re-evaluation after updateContext() failed; previous flags retained.
+   *
+   * Note: ready() will never throw. All errors are surfaced exclusively through this callback.
+   */
   onError?: (error: Error) => void;
   previewMode?: boolean;
   rawFlags?: Record<string, FlagValue>;
@@ -24,17 +36,20 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
   cacheAdapter?: CacheAdapter<C>;
   restEndpoint?: string;
   wsEndpoint?: string;
-  env?: Environment;
+  debugLog?: boolean; // this option should be true, if a user wants access to flagmint internal logs
+  env?: string;
+  enableFlagmint: boolean; // this is used to trigger connection to Flagmint service. This prevents connection when in dev and reduced billing.
 }
 
 const DEFAULT_CACHE_TTL = 24 * 60 * 60 * 1000;
 
 /**
- * Get default endpoints based on environment
+ * Get default endpoints based on NODE_ENV
  */
-function getDefaultEndpoints(env?: Environment): { rest: string; ws: string } {
-  const resolvedEnv = env || (typeof process !== 'undefined' ? (process.env.NEXT_PUBLIC_NODE_ENV || process.env.NODE_ENV) : 'development');
-  switch (resolvedEnv) {
+function getDefaultEndpoints(env?: string): { rest: string; ws: string } {
+  const environment =
+    env || (typeof process !== 'undefined' ? (process.env.NEXT_PUBLIC_NODE_ENV || process.env.NODE_ENV) : 'production');
+  switch (environment?.toLowerCase()) {
     case 'production':
       return {
         rest: 'https://api.flagmint.com/evaluator/evaluate',
@@ -48,16 +63,14 @@ function getDefaultEndpoints(env?: Environment): { rest: string; ws: string } {
     case 'development':
     default:
       return {
-        rest: 'http://localhost:3000/evaluator/evaluate',
-        ws: 'ws://localhost:3000/ws/sdk',
+        rest: 'https://api.flagmint.com/evaluator/evaluate',
+        ws: 'wss://api.flagmint.com/ws/sdk',
       };
   }
 }
 
-// Note: Default endpoints are computed per-client based on the env option
-// These are kept for backward compatibility if no env is specified
-const DEFAULT_REST_ENDPOINT = getDefaultEndpoints().rest;
-const DEFAULT_WS_ENDPOINT = getDefaultEndpoints().ws;
+const REST_ENDPOINT = getDefaultEndpoints().rest;
+const WS_ENDPOINT = getDefaultEndpoints().ws;
 
 // Type for subscription callbacks
 type FlagUpdateCallback<T> = (flags: FeatureFlags<T>) => void;
@@ -82,6 +95,9 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   private rawFlags: Record<string, FlagValue> = {};
   private cacheAdapter: CacheAdapter<C>;
 
+  private env?: string;
+  private enableFlagmint?: boolean;
+
   // NEW: Track if initialization was deferred
   private deferInitialization: boolean;
   private initializationOptions?: FlagClientOptions<C>;
@@ -100,11 +116,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     this.persistContext = options.persistContext ?? false;
     this.cacheTTL = DEFAULT_CACHE_TTL;
     this.onError = options.onError;
-    
-    // Compute endpoints based on provided env option; if env is not set, use module-level defaults for backward compatibility
-    const endpoints = options.env ? getDefaultEndpoints(options.env) : { rest: DEFAULT_REST_ENDPOINT, ws: DEFAULT_WS_ENDPOINT };
-    this.restEndpoint = options.restEndpoint ?? endpoints.rest;
-    this.wsEndpoint = options.wsEndpoint ?? endpoints.ws;
+    this.restEndpoint = getDefaultEndpoints(options.env).rest ?? REST_ENDPOINT;
+    this.wsEndpoint = getDefaultEndpoints(options.env).ws ?? WS_ENDPOINT;
     this.cacheAdapter = options.cacheAdapter ?? {
       loadFlags: syncCache.loadCachedFlags,
       saveFlags: syncCache.saveCachedFlags,
@@ -116,6 +129,10 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     this.rawFlags = options.rawFlags ?? {};
     this.previewMode = options.previewMode || false;
     this.deferInitialization = options.deferInitialization ?? false;
+    this.env = options.env;
+    this.enableFlagmint = options.enableFlagmint ?? true;
+
+    logger.setup({ debugLog: options.debugLog });
 
     // Local-only evaluation
     if (this.previewMode && this.rawFlags && Object.keys(this.rawFlags).length > 0) {
@@ -133,14 +150,19 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       this.resolveReady = resolve;
       this.rejectReady = reject;
     });
-    if (this.deferInitialization) {
-      logger.log('[FlagClient] Initialization deferred. Call ready() to initialize.');
-      // Store options for later initialization
-      this.initializationOptions = options;
-      // Don't initialize yet!
+
+    if(this.enableFlagmint) {
+      if (this.deferInitialization) {
+        logger.log('[FlagClient] Initialization deferred. Call ready() to initialize.');
+        // Store options for later initialization
+        this.initializationOptions = options;
+        // Don't initialize yet!
+      } else {
+        // Initialize immediately (existing behavior)
+        void this.initialize(options);
+      }
     } else {
-      // Initialize immediately (existing behavior)
-      void this.initialize(options);
+      logger.log('[FlagClient] Flagmint connection disabled. Skipping initialization.');
     }
   }
 
@@ -148,7 +170,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    * Initializes the client by loading cached flags and context, setting up the transport layer.
    */
   private async initialize(options: FlagClientOptions<C>): Promise<void> {
-    logger.log('[FlagClient] Initialization started with options:', options);
+    logger.log('[FlagClient] Initialization started');
     if (this.isInitialized) {
       logger.log('[FlagClient] Already initialized, skipping.');
       return;
@@ -185,19 +207,19 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       const error = err instanceof Error ? err : new Error(String(err));
       logger.error('[FlagClient] Initialization failed:', error);
 
+      // Always resolve — the app should render its fallback UI regardless of whether
+      // we have cached flags or not. onError carries the reason; ready() must not throw
+      // because most call sites (Vue plugin, React hooks) don't wrap it in try/catch.
+      // Cached flags, if any, are already in this.flags from step B above.
       if (Object.keys(this.flags).length > 0) {
-        // Cached flags are available - operate in degraded mode
         logger.warn('[FlagClient] Transport connection failed. Serving cached flags in degraded mode.');
-        this.isInitialized = true;
-        this.resolveReady();
-        // Notify about degraded mode via error callback
-        this.onError?.(error);
       } else {
-        // No cached flags available - fail initialization
-        logger.error('[FlagClient] No cached flags available. Initialization failed.');
-        this.onError?.(error);
-        this.rejectReady(error);
+        logger.warn('[FlagClient] Transport connection failed. No cached flags — getFlag() will return fallback values.');
       }
+
+      this.onError?.(error);
+      this.isInitialized = true;
+      this.resolveReady();
     }
   }
 
@@ -240,6 +262,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       try {
         this.transport = await useWebSocket();
       } catch (e) {
+        const code = (e as any).code;
+        if (code === 'ERR_AUTH' || code === 'ERR_RATE_LIMITED') throw e; // both terminal — long polling hits the same wall
         logger.warn('[FlagClient] WebSocket failed, falling back to long polling');
         this.transport = useLongPolling();
       }
