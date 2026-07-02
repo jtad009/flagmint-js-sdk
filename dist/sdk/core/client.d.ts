@@ -9,6 +9,19 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
     persistContext?: boolean;
     transport?: Transport<C, any>;
     transportMode?: TransportMode;
+    /**
+     * Called when a non-fatal but noteworthy error occurs during or after initialization.
+     * The client always resolves ready() regardless — use this to show a degraded/fallback UI.
+     *
+     * Common cases:
+     *  - Auth failure (err.code === 'ERR_AUTH'): API key invalid; flags will be empty; getFlag() returns fallback values.
+     *  - Rate limited (err.code === 'ERR_RATE_LIMITED'): free-tier call limit exceeded; cached flags are served if available.
+     *    Check (err as any).resetTime for the reset timestamp string supplied by the server, if present.
+     *  - Degraded mode: transport failed but cached flags are available and being served.
+     *  - Context update error: re-evaluation after updateContext() failed; previous flags retained.
+     *
+     * Note: ready() will never throw. All errors are surfaced exclusively through this callback.
+     */
     onError?: (error: Error) => void;
     previewMode?: boolean;
     rawFlags?: Record<string, FlagValue>;
@@ -16,6 +29,9 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
     cacheAdapter?: CacheAdapter<C>;
     restEndpoint?: string;
     wsEndpoint?: string;
+    debugLog?: boolean;
+    env?: string;
+    enableFlagmint: boolean;
 }
 type FlagUpdateCallback<T> = (flags: FeatureFlags<T>) => void;
 export declare class FlagClient<T = unknown, C extends Record<string, any> = Record<string, any>> {
@@ -36,6 +52,8 @@ export declare class FlagClient<T = unknown, C extends Record<string, any> = Rec
     private previewMode;
     private rawFlags;
     private cacheAdapter;
+    private env?;
+    private enableFlagmint?;
     private deferInitialization;
     private initializationOptions?;
     private isInitialized;
@@ -56,6 +74,10 @@ export declare class FlagClient<T = unknown, C extends Record<string, any> = Rec
     /**
      * Updates flags and notifies all subscribers.
      * This is the centralized method for any flag update.
+     *
+     * Task 2: Guard against empty payload overwrites.
+     * If newFlags is empty and this.flags is non-empty, skip the overwrite
+     * and surface via onError instead.
      */
     private updateFlags;
     /**
@@ -86,6 +108,8 @@ export declare class FlagClient<T = unknown, C extends Record<string, any> = Rec
     destroy(): void;
     /**
      * Wait for the client to be ready.
+     * Resolves when: flags are available AND initialization succeeded.
+     * Rejects if: initialization/connection fails (even if cached flags exist).
      */
     ready(timeoutMs?: number): Promise<void>;
     /**
