@@ -11,6 +11,8 @@ export declare class WebSocketTransport<C, T> implements Transport<C, T> {
     private isReady;
     private initialFlagsReceived;
     private initialFlagsPromise;
+    private initialFlagsResolve;
+    private initialFlagsReject;
     private onFlagsUpdatedCallback?;
     private onConnectionStateCallback?;
     private retries;
