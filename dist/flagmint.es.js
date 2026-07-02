@@ -700,13 +700,13 @@ x0.write = function(a, n, o, s, m, f) {
   }, y.prototype.readBigUInt64LE = ct(function(M) {
     M = M >>> 0, J(M, "offset");
     const A = this[M], T = this[M + 7];
-    (A === void 0 || T === void 0) && Ft(M, this.length - 8);
+    (A === void 0 || T === void 0) && qt(M, this.length - 8);
     const F = A + this[++M] * me(2, 8) + this[++M] * me(2, 16) + this[++M] * me(2, 24), V = this[++M] + this[++M] * me(2, 8) + this[++M] * me(2, 16) + T * me(2, 24);
     return BigInt(F) + (BigInt(V) << BigInt(32));
   }), y.prototype.readBigUInt64BE = ct(function(M) {
     M = M >>> 0, J(M, "offset");
     const A = this[M], T = this[M + 7];
-    (A === void 0 || T === void 0) && Ft(M, this.length - 8);
+    (A === void 0 || T === void 0) && qt(M, this.length - 8);
     const F = A * me(2, 24) + this[++M] * me(2, 16) + this[++M] * me(2, 8) + this[++M], V = this[++M] * me(2, 24) + this[++M] * me(2, 16) + this[++M] * me(2, 8) + T;
     return (BigInt(F) << BigInt(32)) + BigInt(V);
   }), y.prototype.readIntLE = function(M, A, T) {
@@ -738,13 +738,13 @@ x0.write = function(a, n, o, s, m, f) {
   }, y.prototype.readBigInt64LE = ct(function(M) {
     M = M >>> 0, J(M, "offset");
     const A = this[M], T = this[M + 7];
-    (A === void 0 || T === void 0) && Ft(M, this.length - 8);
+    (A === void 0 || T === void 0) && qt(M, this.length - 8);
     const F = this[M + 4] + this[M + 5] * me(2, 8) + this[M + 6] * me(2, 16) + (T << 24);
     return (BigInt(F) << BigInt(32)) + BigInt(A + this[++M] * me(2, 8) + this[++M] * me(2, 16) + this[++M] * me(2, 24));
   }), y.prototype.readBigInt64BE = ct(function(M) {
     M = M >>> 0, J(M, "offset");
     const A = this[M], T = this[M + 7];
-    (A === void 0 || T === void 0) && Ft(M, this.length - 8);
+    (A === void 0 || T === void 0) && qt(M, this.length - 8);
     const F = (A << 24) + // Overflow
     this[++M] * me(2, 16) + this[++M] * me(2, 8) + this[++M];
     return (BigInt(F) << BigInt(32)) + BigInt(this[++M] * me(2, 24) + this[++M] * me(2, 16) + this[++M] * me(2, 8) + T);
@@ -968,7 +968,7 @@ x0.write = function(a, n, o, s, m, f) {
     return `${E.slice(0, A)}${M}`;
   }
   function kt(E, M, A) {
-    J(M, "offset"), (E[M] === void 0 || E[M + A] === void 0) && Ft(M, E.length - (A + 1));
+    J(M, "offset"), (E[M] === void 0 || E[M + A] === void 0) && qt(M, E.length - (A + 1));
   }
   function Z(E, M, A, T, F, V) {
     if (E > A || E < M) {
@@ -982,7 +982,7 @@ x0.write = function(a, n, o, s, m, f) {
     if (typeof E != "number")
       throw new P.ERR_INVALID_ARG_TYPE(M, "number", E);
   }
-  function Ft(E, M, A) {
+  function qt(E, M, A) {
     throw Math.floor(E) !== E ? (J(E, A), new P.ERR_OUT_OF_RANGE(A || "offset", "an integer", E)) : M < 0 ? new P.ERR_BUFFER_OUT_OF_BOUNDS() : new P.ERR_OUT_OF_RANGE(
       A || "offset",
       `>= ${A ? 1 : 0} and <= ${M}`,
@@ -1128,25 +1128,25 @@ function ki(a, n, o) {
     (g) => a.toLowerCase().includes(g.toLowerCase())
   ) : !!o;
 }
-const qt = {
+const Ft = {
   canDebugLog: !1,
   setup: (a) => {
-    a.debugLog ? qt.canDebugLog = a.debugLog : qt.canDebugLog = !1;
+    a.debugLog ? Ft.canDebugLog = a.debugLog : Ft.canDebugLog = !1;
   },
   log: (a, ...n) => {
-    ki(a, "log", qt.canDebugLog) && console.log(a, ...n);
+    ki(a, "log", Ft.canDebugLog) && console.log(a, ...n);
   },
   error: (a, ...n) => {
-    ki(a, "error", qt.canDebugLog) && console.error(a, ...n);
+    ki(a, "error", Ft.canDebugLog) && console.error(a, ...n);
   },
   warn: (a, ...n) => {
-    ki(a, "warn", qt.canDebugLog) && console.warn(a, ...n);
+    ki(a, "warn", Ft.canDebugLog) && console.warn(a, ...n);
   },
   info: (a, ...n) => {
-    ki(a, "info", qt.canDebugLog) && console.info(a, ...n);
+    ki(a, "info", Ft.canDebugLog) && console.info(a, ...n);
   },
   debug: (a, ...n) => {
-    ki(a, "debug", qt.canDebugLog) && console.debug(a, ...n);
+    ki(a, "debug", Ft.canDebugLog) && console.debug(a, ...n);
   }
 };
 class Eu {
@@ -1156,9 +1156,9 @@ class Eu {
   init() {
     return Ie(this, null, function* () {
       try {
-        this.currentFlags = yield this.fetchFlags(this.currentContext), this.consecutiveErrors = 0, qt.log("[LongPollingTransport] Initial fetch complete");
+        this.currentFlags = yield this.fetchFlags(this.currentContext), this.consecutiveErrors = 0, Ft.log("[LongPollingTransport] Initial fetch complete");
       } catch (n) {
-        qt.error("[LongPollingTransport] Initial fetch failed:", n);
+        Ft.error("[LongPollingTransport] Initial fetch failed:", n);
       }
       this.scheduleNextPoll();
     });
@@ -1167,7 +1167,7 @@ class Eu {
     if (this.isStopped)
       return;
     const n = this.pollIntervalMs + this.currentBackoffMs;
-    qt.log(
+    Ft.log(
       `[LongPollingTransport] Next poll in ${n}ms` + (this.currentBackoffMs > 0 ? ` (backoff: ${this.currentBackoffMs}ms)` : "")
     ), this.pollTimeoutId = setTimeout(() => Ie(this, null, function* () {
       yield this.poll(), this.scheduleNextPoll();
@@ -1178,9 +1178,9 @@ class Eu {
       var n;
       try {
         const o = yield this.fetchFlags(this.currentContext);
-        this.consecutiveErrors > 0 && (qt.log("[LongPollingTransport] ✅ Recovered from errors"), this.consecutiveErrors = 0, this.currentBackoffMs = 0), this.flagsChanged(o) && (qt.log("[LongPollingTransport] Flags changed, notifying..."), this.currentFlags = o, (n = this.onUpdateCallback) == null || n.call(this, o));
+        this.consecutiveErrors > 0 && (Ft.log("[LongPollingTransport] ✅ Recovered from errors"), this.consecutiveErrors = 0, this.currentBackoffMs = 0), this.flagsChanged(o) && (Ft.log("[LongPollingTransport] Flags changed, notifying..."), this.currentFlags = o, (n = this.onUpdateCallback) == null || n.call(this, o));
       } catch (o) {
-        qt.error("[LongPollingTransport] ❌ Poll error:", o), this.consecutiveErrors++, this.applyBackoff();
+        Ft.error("[LongPollingTransport] ❌ Poll error:", o), this.consecutiveErrors++, this.applyBackoff();
       }
     });
   }
@@ -1192,7 +1192,7 @@ class Eu {
         this.backoffMultiplier,
         this.consecutiveErrors - 2
       );
-      this.currentBackoffMs = Math.min(n, this.maxBackoffMs), qt.warn(
+      this.currentBackoffMs = Math.min(n, this.maxBackoffMs), Ft.warn(
         `[LongPollingTransport] Backing off ${this.currentBackoffMs}ms (${this.consecutiveErrors} consecutive errors)`
       );
     }
@@ -1223,7 +1223,7 @@ class Eu {
     this.onUpdateCallback = n;
   }
   destroy() {
-    qt.log("[LongPollingTransport] Destroying..."), this.isStopped = !0, this.pollTimeoutId !== null && (clearTimeout(this.pollTimeoutId), this.pollTimeoutId = null), this.onUpdateCallback = void 0;
+    Ft.log("[LongPollingTransport] Destroying..."), this.isStopped = !0, this.pollTimeoutId !== null && (clearTimeout(this.pollTimeoutId), this.pollTimeoutId = null), this.onUpdateCallback = void 0;
   }
 }
 class ku {
@@ -1247,28 +1247,28 @@ class ku {
           this.cleanupSocket(), this.setConnectionState("connecting");
           const m = this.getWebSocketImplementation();
           this.socket = new m(`${this.wsUrl}?apiKey=${this.apiKey}`), this.socket.onopen = () => {
-            qt.log("[WebSocketTransport] Connected"), this.isReady = !0, this.retries = 0, this.setConnectionState("connected"), this.context && this.sendContext(this.context), n();
+            Ft.log("[WebSocketTransport] Connected"), this.isReady = !0, this.retries = 0, this.setConnectionState("connected"), this.context && this.sendContext(this.context), n();
           }, this.socket.onmessage = (f) => {
             var g;
             try {
               const y = JSON.parse(f.data);
-              if (qt.log("[WebSocketTransport] Message received:", y), y.type === "ping") {
+              if (Ft.log("[WebSocketTransport] Message received:", y), y.type === "ping") {
                 this.socket && this.socket.readyState === 1 && this.socket.send(JSON.stringify({ type: "pong" }));
                 return;
               }
               if (y.type === "pong") {
-                qt.log("[WebSocketTransport] Pong received");
+                Ft.log("[WebSocketTransport] Pong received");
                 return;
               }
-              y.type === "flags" && (qt.log("[WebSocketTransport] Flags update received"), this.flags = y.flags, this.initialFlagsReceived = !0, (g = this.onFlagsUpdatedCallback) == null || g.call(this, this.flags), this.initialFlagsResolve && (this.initialFlagsResolve(), this.initialFlagsResolve = null));
+              y.type === "flags" && (Ft.log("[WebSocketTransport] Flags update received"), this.flags = y.flags, this.initialFlagsReceived = !0, (g = this.onFlagsUpdatedCallback) == null || g.call(this, this.flags), this.initialFlagsResolve && (this.initialFlagsResolve(), this.initialFlagsResolve = null));
             } catch (y) {
-              qt.warn("[WebSocketTransport] Failed to parse message:", y);
+              Ft.warn("[WebSocketTransport] Failed to parse message:", y);
             }
           }, this.socket.onerror = (f) => {
-            qt.error("[WebSocketTransport] Error:", f);
+            Ft.error("[WebSocketTransport] Error:", f);
           }, this.socket.onclose = (f) => {
             var g, y, S;
-            if (qt.log("[WebSocketTransport] Connection closed:", f.code), this.isReady = !1, this.setConnectionState("disconnected"), f.code === 1008 || f.code === 4001) {
+            if (Ft.log("[WebSocketTransport] Connection closed:", f.code), this.isReady = !1, this.setConnectionState("disconnected"), f.code === 1008 || f.code === 4001) {
               this.setConnectionState("failed");
               const B = (g = f.reason) != null ? g : "", x = B.toLowerCase().includes("rate limit") || B.toLowerCase().includes("too many") ? Object.assign(new Error(B || "Rate limit exceeded. Please try again later."), {
                 code: "ERR_RATE_LIMITED",
@@ -1279,14 +1279,14 @@ class ku {
             }
             if (this.retries < this.maxRetries) {
               const B = this.initialBackoffMs * Math.pow(2, this.retries);
-              qt.warn(
+              Ft.warn(
                 `[WebSocketTransport] Reconnecting in ${B}ms (attempt ${this.retries + 1})`
               ), this.setConnectionState("reconnecting"), this.reconnectTimeoutId = setTimeout(s, B), this.retries++;
             } else
               this.setConnectionState("failed"), o(new Error(`WebSocket failed after ${this.retries} retries`));
           };
         } catch (m) {
-          qt.error("[WebSocketTransport] Failed to create socket:", m), this.setConnectionState("failed"), o(m);
+          Ft.error("[WebSocketTransport] Failed to create socket:", m), this.setConnectionState("failed"), o(m);
         }
       };
       s();
@@ -1326,11 +1326,11 @@ class ku {
     this.onConnectionStateCallback = n;
   }
   destroy() {
-    qt.log("[WebSocketTransport] Destroying..."), this.reconnectTimeoutId !== null && (clearTimeout(this.reconnectTimeoutId), this.reconnectTimeoutId = null), this.cleanupSocket(), this.flags = {}, this.context = null, this.isReady = !1, this.initialFlagsReceived = !1, this.initialFlagsPromise = null, this.initialFlagsResolve = null, this.initialFlagsReject = null, this.onFlagsUpdatedCallback = void 0, this.onConnectionStateCallback = void 0, this.retries = 0;
+    Ft.log("[WebSocketTransport] Destroying..."), this.reconnectTimeoutId !== null && (clearTimeout(this.reconnectTimeoutId), this.reconnectTimeoutId = null), this.cleanupSocket(), this.flags = {}, this.context = null, this.isReady = !1, this.initialFlagsReceived = !1, this.initialFlagsPromise = null, this.initialFlagsResolve = null, this.initialFlagsReject = null, this.onFlagsUpdatedCallback = void 0, this.onConnectionStateCallback = void 0, this.retries = 0;
   }
   sendContext(n) {
     if (!this.socket || this.socket.readyState !== 1) {
-      qt.warn("[WebSocketTransport] Socket not ready, cannot send context");
+      Ft.warn("[WebSocketTransport] Socket not ready, cannot send context");
       return;
     }
     const o = JSON.stringify({
@@ -6109,7 +6109,7 @@ $0.exports;
       return u !== 0 ? r.words[e] = u | 0 : r.length--, r.strip();
     }
     var U = function(t, r, i) {
-      var h = t.words, d = r.words, c = i.words, v = 0, u, e, l, b = h[0] | 0, _ = b & 8191, C = b >>> 13, q = h[1] | 0, O = q & 8191, R = q >>> 13, P = h[2] | 0, N = P & 8191, K = P >>> 13, kt = h[3] | 0, Z = kt & 8191, J = kt >>> 13, Ft = h[4] | 0, tt = Ft & 8191, vt = Ft >>> 13, Nt = h[5] | 0, et = Nt & 8191, pt = Nt >>> 13, Dt = h[6] | 0, j = Dt & 8191, dt = Dt >>> 13, Pt = h[7] | 0, Q = Pt & 8191, ct = Pt >>> 13, Ot = h[8] | 0, E = Ot & 8191, M = Ot >>> 13, A = h[9] | 0, T = A & 8191, F = A >>> 13, V = d[0] | 0, L = V & 8191, X = V >>> 13, Tt = d[1] | 0, G = Tt & 8191, rt = Tt >>> 13, Rt = d[2] | 0, it = Rt & 8191, gt = Rt >>> 13, Kt = d[3] | 0, nt = Kt & 8191, bt = Kt >>> 13, Ht = d[4] | 0, ft = Ht & 8191, yt = Ht >>> 13, Zt = d[5] | 0, at = Zt & 8191, wt = Zt >>> 13, Wt = d[6] | 0, ht = Wt & 8191, Mt = Wt >>> 13, Vt = d[7] | 0, st = Vt & 8191, xt = Vt >>> 13, Yt = d[8] | 0, ot = Yt & 8191, _t = Yt >>> 13, Jt = d[9] | 0, ut = Jt & 8191, St = Jt >>> 13;
+      var h = t.words, d = r.words, c = i.words, v = 0, u, e, l, b = h[0] | 0, _ = b & 8191, C = b >>> 13, q = h[1] | 0, O = q & 8191, R = q >>> 13, P = h[2] | 0, N = P & 8191, K = P >>> 13, kt = h[3] | 0, Z = kt & 8191, J = kt >>> 13, qt = h[4] | 0, tt = qt & 8191, vt = qt >>> 13, Nt = h[5] | 0, et = Nt & 8191, pt = Nt >>> 13, Dt = h[6] | 0, j = Dt & 8191, dt = Dt >>> 13, Pt = h[7] | 0, Q = Pt & 8191, ct = Pt >>> 13, Ot = h[8] | 0, E = Ot & 8191, M = Ot >>> 13, A = h[9] | 0, T = A & 8191, F = A >>> 13, V = d[0] | 0, L = V & 8191, X = V >>> 13, Tt = d[1] | 0, G = Tt & 8191, rt = Tt >>> 13, Rt = d[2] | 0, it = Rt & 8191, gt = Rt >>> 13, Kt = d[3] | 0, nt = Kt & 8191, bt = Kt >>> 13, Ht = d[4] | 0, ft = Ht & 8191, yt = Ht >>> 13, Zt = d[5] | 0, at = Zt & 8191, wt = Zt >>> 13, Wt = d[6] | 0, ht = Wt & 8191, Mt = Wt >>> 13, Vt = d[7] | 0, st = Vt & 8191, xt = Vt >>> 13, Yt = d[8] | 0, ot = Yt & 8191, _t = Yt >>> 13, Jt = d[9] | 0, ut = Jt & 8191, St = Jt >>> 13;
       i.negative = t.negative ^ r.negative, i.length = 19, u = Math.imul(_, L), e = Math.imul(_, X), e = e + Math.imul(C, L) | 0, l = Math.imul(C, X);
       var $t = (v + u | 0) + ((e & 8191) << 13) | 0;
       v = (l + (e >>> 13) | 0) + ($t >>> 26) | 0, $t &= 67108863, u = Math.imul(O, L), e = Math.imul(O, X), e = e + Math.imul(R, L) | 0, l = Math.imul(R, X), u = u + Math.imul(_, G) | 0, e = e + Math.imul(_, rt) | 0, e = e + Math.imul(C, G) | 0, l = l + Math.imul(C, rt) | 0;
@@ -7289,7 +7289,7 @@ L0.exports;
       return u !== 0 ? r.words[e] = u | 0 : r.length--, r.strip();
     }
     var U = function(t, r, i) {
-      var h = t.words, d = r.words, c = i.words, v = 0, u, e, l, b = h[0] | 0, _ = b & 8191, C = b >>> 13, q = h[1] | 0, O = q & 8191, R = q >>> 13, P = h[2] | 0, N = P & 8191, K = P >>> 13, kt = h[3] | 0, Z = kt & 8191, J = kt >>> 13, Ft = h[4] | 0, tt = Ft & 8191, vt = Ft >>> 13, Nt = h[5] | 0, et = Nt & 8191, pt = Nt >>> 13, Dt = h[6] | 0, j = Dt & 8191, dt = Dt >>> 13, Pt = h[7] | 0, Q = Pt & 8191, ct = Pt >>> 13, Ot = h[8] | 0, E = Ot & 8191, M = Ot >>> 13, A = h[9] | 0, T = A & 8191, F = A >>> 13, V = d[0] | 0, L = V & 8191, X = V >>> 13, Tt = d[1] | 0, G = Tt & 8191, rt = Tt >>> 13, Rt = d[2] | 0, it = Rt & 8191, gt = Rt >>> 13, Kt = d[3] | 0, nt = Kt & 8191, bt = Kt >>> 13, Ht = d[4] | 0, ft = Ht & 8191, yt = Ht >>> 13, Zt = d[5] | 0, at = Zt & 8191, wt = Zt >>> 13, Wt = d[6] | 0, ht = Wt & 8191, Mt = Wt >>> 13, Vt = d[7] | 0, st = Vt & 8191, xt = Vt >>> 13, Yt = d[8] | 0, ot = Yt & 8191, _t = Yt >>> 13, Jt = d[9] | 0, ut = Jt & 8191, St = Jt >>> 13;
+      var h = t.words, d = r.words, c = i.words, v = 0, u, e, l, b = h[0] | 0, _ = b & 8191, C = b >>> 13, q = h[1] | 0, O = q & 8191, R = q >>> 13, P = h[2] | 0, N = P & 8191, K = P >>> 13, kt = h[3] | 0, Z = kt & 8191, J = kt >>> 13, qt = h[4] | 0, tt = qt & 8191, vt = qt >>> 13, Nt = h[5] | 0, et = Nt & 8191, pt = Nt >>> 13, Dt = h[6] | 0, j = Dt & 8191, dt = Dt >>> 13, Pt = h[7] | 0, Q = Pt & 8191, ct = Pt >>> 13, Ot = h[8] | 0, E = Ot & 8191, M = Ot >>> 13, A = h[9] | 0, T = A & 8191, F = A >>> 13, V = d[0] | 0, L = V & 8191, X = V >>> 13, Tt = d[1] | 0, G = Tt & 8191, rt = Tt >>> 13, Rt = d[2] | 0, it = Rt & 8191, gt = Rt >>> 13, Kt = d[3] | 0, nt = Kt & 8191, bt = Kt >>> 13, Ht = d[4] | 0, ft = Ht & 8191, yt = Ht >>> 13, Zt = d[5] | 0, at = Zt & 8191, wt = Zt >>> 13, Wt = d[6] | 0, ht = Wt & 8191, Mt = Wt >>> 13, Vt = d[7] | 0, st = Vt & 8191, xt = Vt >>> 13, Yt = d[8] | 0, ot = Yt & 8191, _t = Yt >>> 13, Jt = d[9] | 0, ut = Jt & 8191, St = Jt >>> 13;
       i.negative = t.negative ^ r.negative, i.length = 19, u = Math.imul(_, L), e = Math.imul(_, X), e = e + Math.imul(C, L) | 0, l = Math.imul(C, X);
       var $t = (v + u | 0) + ((e & 8191) << 13) | 0;
       v = (l + (e >>> 13) | 0) + ($t >>> 26) | 0, $t &= 67108863, u = Math.imul(O, L), e = Math.imul(O, X), e = e + Math.imul(R, L) | 0, l = Math.imul(R, X), u = u + Math.imul(_, G) | 0, e = e + Math.imul(_, rt) | 0, e = e + Math.imul(C, G) | 0, l = l + Math.imul(C, rt) | 0;
@@ -8938,19 +8938,19 @@ function fo() {
         break;
     }
     K.pipesCount += 1, x("pipe count=%d opts=%j", K.pipesCount, P);
-    var kt = (!P || P.end !== !1) && R !== we.stdout && R !== we.stderr, Z = kt ? Ft : Pt;
+    var kt = (!P || P.end !== !1) && R !== we.stdout && R !== we.stderr, Z = kt ? qt : Pt;
     K.endEmitted ? a.nextTick(Z) : N.once("end", Z), R.on("unpipe", J);
     function J(Q, ct) {
       x("onunpipe"), Q === N && ct && ct.hasUnpiped === !1 && (ct.hasUnpiped = !0, Nt());
     }
-    function Ft() {
+    function qt() {
       x("onend"), R.end();
     }
     var tt = h(N);
     R.on("drain", tt);
     var vt = !1;
     function Nt() {
-      x("cleanup"), R.removeListener("close", j), R.removeListener("finish", dt), R.removeListener("drain", tt), R.removeListener("error", Dt), R.removeListener("unpipe", J), N.removeListener("end", Ft), N.removeListener("end", Pt), N.removeListener("data", pt), vt = !0, K.awaitDrain && (!R._writableState || R._writableState.needDrain) && tt();
+      x("cleanup"), R.removeListener("close", j), R.removeListener("finish", dt), R.removeListener("drain", tt), R.removeListener("error", Dt), R.removeListener("unpipe", J), N.removeListener("end", qt), N.removeListener("end", Pt), N.removeListener("data", pt), vt = !0, K.awaitDrain && (!R._writableState || R._writableState.needDrain) && tt();
     }
     var et = !1;
     N.on("data", pt);
@@ -9038,8 +9038,8 @@ function fo() {
       P.push(null);
     }), R.on("data", function(J) {
       if (x("wrapped data"), N.decoder && (J = N.decoder.write(J)), !(N.objectMode && J == null) && !(!N.objectMode && (!J || !J.length))) {
-        var Ft = P.push(J);
-        Ft || (K = !0, R.pause());
+        var qt = P.push(J);
+        qt || (K = !0, R.pause());
       }
     });
     for (var kt in R)
@@ -9657,32 +9657,32 @@ z0.exports;
       return l !== 0 ? h.words[b] = l | 0 : h.length--, h._strip();
     }
     var $ = function(i, h, d) {
-      var c = i.words, v = h.words, u = d.words, e = 0, l, b, _, C = c[0] | 0, q = C & 8191, O = C >>> 13, R = c[1] | 0, P = R & 8191, N = R >>> 13, K = c[2] | 0, kt = K & 8191, Z = K >>> 13, J = c[3] | 0, Ft = J & 8191, tt = J >>> 13, vt = c[4] | 0, Nt = vt & 8191, et = vt >>> 13, pt = c[5] | 0, Dt = pt & 8191, j = pt >>> 13, dt = c[6] | 0, Pt = dt & 8191, Q = dt >>> 13, ct = c[7] | 0, Ot = ct & 8191, E = ct >>> 13, M = c[8] | 0, A = M & 8191, T = M >>> 13, F = c[9] | 0, V = F & 8191, L = F >>> 13, X = v[0] | 0, Tt = X & 8191, G = X >>> 13, rt = v[1] | 0, Rt = rt & 8191, it = rt >>> 13, gt = v[2] | 0, Kt = gt & 8191, nt = gt >>> 13, bt = v[3] | 0, Ht = bt & 8191, ft = bt >>> 13, yt = v[4] | 0, Zt = yt & 8191, at = yt >>> 13, wt = v[5] | 0, Wt = wt & 8191, ht = wt >>> 13, Mt = v[6] | 0, Vt = Mt & 8191, st = Mt >>> 13, xt = v[7] | 0, Yt = xt & 8191, ot = xt >>> 13, _t = v[8] | 0, Jt = _t & 8191, ut = _t >>> 13, St = v[9] | 0, $t = St & 8191, Lt = St >>> 13;
+      var c = i.words, v = h.words, u = d.words, e = 0, l, b, _, C = c[0] | 0, q = C & 8191, O = C >>> 13, R = c[1] | 0, P = R & 8191, N = R >>> 13, K = c[2] | 0, kt = K & 8191, Z = K >>> 13, J = c[3] | 0, qt = J & 8191, tt = J >>> 13, vt = c[4] | 0, Nt = vt & 8191, et = vt >>> 13, pt = c[5] | 0, Dt = pt & 8191, j = pt >>> 13, dt = c[6] | 0, Pt = dt & 8191, Q = dt >>> 13, ct = c[7] | 0, Ot = ct & 8191, E = ct >>> 13, M = c[8] | 0, A = M & 8191, T = M >>> 13, F = c[9] | 0, V = F & 8191, L = F >>> 13, X = v[0] | 0, Tt = X & 8191, G = X >>> 13, rt = v[1] | 0, Rt = rt & 8191, it = rt >>> 13, gt = v[2] | 0, Kt = gt & 8191, nt = gt >>> 13, bt = v[3] | 0, Ht = bt & 8191, ft = bt >>> 13, yt = v[4] | 0, Zt = yt & 8191, at = yt >>> 13, wt = v[5] | 0, Wt = wt & 8191, ht = wt >>> 13, Mt = v[6] | 0, Vt = Mt & 8191, st = Mt >>> 13, xt = v[7] | 0, Yt = xt & 8191, ot = xt >>> 13, _t = v[8] | 0, Jt = _t & 8191, ut = _t >>> 13, St = v[9] | 0, $t = St & 8191, Lt = St >>> 13;
       d.negative = i.negative ^ h.negative, d.length = 19, l = Math.imul(q, Tt), b = Math.imul(q, G), b = b + Math.imul(O, Tt) | 0, _ = Math.imul(O, G);
       var Qt = (e + l | 0) + ((b & 8191) << 13) | 0;
       e = (_ + (b >>> 13) | 0) + (Qt >>> 26) | 0, Qt &= 67108863, l = Math.imul(P, Tt), b = Math.imul(P, G), b = b + Math.imul(N, Tt) | 0, _ = Math.imul(N, G), l = l + Math.imul(q, Rt) | 0, b = b + Math.imul(q, it) | 0, b = b + Math.imul(O, Rt) | 0, _ = _ + Math.imul(O, it) | 0;
       var te = (e + l | 0) + ((b & 8191) << 13) | 0;
       e = (_ + (b >>> 13) | 0) + (te >>> 26) | 0, te &= 67108863, l = Math.imul(kt, Tt), b = Math.imul(kt, G), b = b + Math.imul(Z, Tt) | 0, _ = Math.imul(Z, G), l = l + Math.imul(P, Rt) | 0, b = b + Math.imul(P, it) | 0, b = b + Math.imul(N, Rt) | 0, _ = _ + Math.imul(N, it) | 0, l = l + Math.imul(q, Kt) | 0, b = b + Math.imul(q, nt) | 0, b = b + Math.imul(O, Kt) | 0, _ = _ + Math.imul(O, nt) | 0;
       var ee = (e + l | 0) + ((b & 8191) << 13) | 0;
-      e = (_ + (b >>> 13) | 0) + (ee >>> 26) | 0, ee &= 67108863, l = Math.imul(Ft, Tt), b = Math.imul(Ft, G), b = b + Math.imul(tt, Tt) | 0, _ = Math.imul(tt, G), l = l + Math.imul(kt, Rt) | 0, b = b + Math.imul(kt, it) | 0, b = b + Math.imul(Z, Rt) | 0, _ = _ + Math.imul(Z, it) | 0, l = l + Math.imul(P, Kt) | 0, b = b + Math.imul(P, nt) | 0, b = b + Math.imul(N, Kt) | 0, _ = _ + Math.imul(N, nt) | 0, l = l + Math.imul(q, Ht) | 0, b = b + Math.imul(q, ft) | 0, b = b + Math.imul(O, Ht) | 0, _ = _ + Math.imul(O, ft) | 0;
+      e = (_ + (b >>> 13) | 0) + (ee >>> 26) | 0, ee &= 67108863, l = Math.imul(qt, Tt), b = Math.imul(qt, G), b = b + Math.imul(tt, Tt) | 0, _ = Math.imul(tt, G), l = l + Math.imul(kt, Rt) | 0, b = b + Math.imul(kt, it) | 0, b = b + Math.imul(Z, Rt) | 0, _ = _ + Math.imul(Z, it) | 0, l = l + Math.imul(P, Kt) | 0, b = b + Math.imul(P, nt) | 0, b = b + Math.imul(N, Kt) | 0, _ = _ + Math.imul(N, nt) | 0, l = l + Math.imul(q, Ht) | 0, b = b + Math.imul(q, ft) | 0, b = b + Math.imul(O, Ht) | 0, _ = _ + Math.imul(O, ft) | 0;
       var re = (e + l | 0) + ((b & 8191) << 13) | 0;
-      e = (_ + (b >>> 13) | 0) + (re >>> 26) | 0, re &= 67108863, l = Math.imul(Nt, Tt), b = Math.imul(Nt, G), b = b + Math.imul(et, Tt) | 0, _ = Math.imul(et, G), l = l + Math.imul(Ft, Rt) | 0, b = b + Math.imul(Ft, it) | 0, b = b + Math.imul(tt, Rt) | 0, _ = _ + Math.imul(tt, it) | 0, l = l + Math.imul(kt, Kt) | 0, b = b + Math.imul(kt, nt) | 0, b = b + Math.imul(Z, Kt) | 0, _ = _ + Math.imul(Z, nt) | 0, l = l + Math.imul(P, Ht) | 0, b = b + Math.imul(P, ft) | 0, b = b + Math.imul(N, Ht) | 0, _ = _ + Math.imul(N, ft) | 0, l = l + Math.imul(q, Zt) | 0, b = b + Math.imul(q, at) | 0, b = b + Math.imul(O, Zt) | 0, _ = _ + Math.imul(O, at) | 0;
+      e = (_ + (b >>> 13) | 0) + (re >>> 26) | 0, re &= 67108863, l = Math.imul(Nt, Tt), b = Math.imul(Nt, G), b = b + Math.imul(et, Tt) | 0, _ = Math.imul(et, G), l = l + Math.imul(qt, Rt) | 0, b = b + Math.imul(qt, it) | 0, b = b + Math.imul(tt, Rt) | 0, _ = _ + Math.imul(tt, it) | 0, l = l + Math.imul(kt, Kt) | 0, b = b + Math.imul(kt, nt) | 0, b = b + Math.imul(Z, Kt) | 0, _ = _ + Math.imul(Z, nt) | 0, l = l + Math.imul(P, Ht) | 0, b = b + Math.imul(P, ft) | 0, b = b + Math.imul(N, Ht) | 0, _ = _ + Math.imul(N, ft) | 0, l = l + Math.imul(q, Zt) | 0, b = b + Math.imul(q, at) | 0, b = b + Math.imul(O, Zt) | 0, _ = _ + Math.imul(O, at) | 0;
       var ie = (e + l | 0) + ((b & 8191) << 13) | 0;
-      e = (_ + (b >>> 13) | 0) + (ie >>> 26) | 0, ie &= 67108863, l = Math.imul(Dt, Tt), b = Math.imul(Dt, G), b = b + Math.imul(j, Tt) | 0, _ = Math.imul(j, G), l = l + Math.imul(Nt, Rt) | 0, b = b + Math.imul(Nt, it) | 0, b = b + Math.imul(et, Rt) | 0, _ = _ + Math.imul(et, it) | 0, l = l + Math.imul(Ft, Kt) | 0, b = b + Math.imul(Ft, nt) | 0, b = b + Math.imul(tt, Kt) | 0, _ = _ + Math.imul(tt, nt) | 0, l = l + Math.imul(kt, Ht) | 0, b = b + Math.imul(kt, ft) | 0, b = b + Math.imul(Z, Ht) | 0, _ = _ + Math.imul(Z, ft) | 0, l = l + Math.imul(P, Zt) | 0, b = b + Math.imul(P, at) | 0, b = b + Math.imul(N, Zt) | 0, _ = _ + Math.imul(N, at) | 0, l = l + Math.imul(q, Wt) | 0, b = b + Math.imul(q, ht) | 0, b = b + Math.imul(O, Wt) | 0, _ = _ + Math.imul(O, ht) | 0;
+      e = (_ + (b >>> 13) | 0) + (ie >>> 26) | 0, ie &= 67108863, l = Math.imul(Dt, Tt), b = Math.imul(Dt, G), b = b + Math.imul(j, Tt) | 0, _ = Math.imul(j, G), l = l + Math.imul(Nt, Rt) | 0, b = b + Math.imul(Nt, it) | 0, b = b + Math.imul(et, Rt) | 0, _ = _ + Math.imul(et, it) | 0, l = l + Math.imul(qt, Kt) | 0, b = b + Math.imul(qt, nt) | 0, b = b + Math.imul(tt, Kt) | 0, _ = _ + Math.imul(tt, nt) | 0, l = l + Math.imul(kt, Ht) | 0, b = b + Math.imul(kt, ft) | 0, b = b + Math.imul(Z, Ht) | 0, _ = _ + Math.imul(Z, ft) | 0, l = l + Math.imul(P, Zt) | 0, b = b + Math.imul(P, at) | 0, b = b + Math.imul(N, Zt) | 0, _ = _ + Math.imul(N, at) | 0, l = l + Math.imul(q, Wt) | 0, b = b + Math.imul(q, ht) | 0, b = b + Math.imul(O, Wt) | 0, _ = _ + Math.imul(O, ht) | 0;
       var ne = (e + l | 0) + ((b & 8191) << 13) | 0;
-      e = (_ + (b >>> 13) | 0) + (ne >>> 26) | 0, ne &= 67108863, l = Math.imul(Pt, Tt), b = Math.imul(Pt, G), b = b + Math.imul(Q, Tt) | 0, _ = Math.imul(Q, G), l = l + Math.imul(Dt, Rt) | 0, b = b + Math.imul(Dt, it) | 0, b = b + Math.imul(j, Rt) | 0, _ = _ + Math.imul(j, it) | 0, l = l + Math.imul(Nt, Kt) | 0, b = b + Math.imul(Nt, nt) | 0, b = b + Math.imul(et, Kt) | 0, _ = _ + Math.imul(et, nt) | 0, l = l + Math.imul(Ft, Ht) | 0, b = b + Math.imul(Ft, ft) | 0, b = b + Math.imul(tt, Ht) | 0, _ = _ + Math.imul(tt, ft) | 0, l = l + Math.imul(kt, Zt) | 0, b = b + Math.imul(kt, at) | 0, b = b + Math.imul(Z, Zt) | 0, _ = _ + Math.imul(Z, at) | 0, l = l + Math.imul(P, Wt) | 0, b = b + Math.imul(P, ht) | 0, b = b + Math.imul(N, Wt) | 0, _ = _ + Math.imul(N, ht) | 0, l = l + Math.imul(q, Vt) | 0, b = b + Math.imul(q, st) | 0, b = b + Math.imul(O, Vt) | 0, _ = _ + Math.imul(O, st) | 0;
+      e = (_ + (b >>> 13) | 0) + (ne >>> 26) | 0, ne &= 67108863, l = Math.imul(Pt, Tt), b = Math.imul(Pt, G), b = b + Math.imul(Q, Tt) | 0, _ = Math.imul(Q, G), l = l + Math.imul(Dt, Rt) | 0, b = b + Math.imul(Dt, it) | 0, b = b + Math.imul(j, Rt) | 0, _ = _ + Math.imul(j, it) | 0, l = l + Math.imul(Nt, Kt) | 0, b = b + Math.imul(Nt, nt) | 0, b = b + Math.imul(et, Kt) | 0, _ = _ + Math.imul(et, nt) | 0, l = l + Math.imul(qt, Ht) | 0, b = b + Math.imul(qt, ft) | 0, b = b + Math.imul(tt, Ht) | 0, _ = _ + Math.imul(tt, ft) | 0, l = l + Math.imul(kt, Zt) | 0, b = b + Math.imul(kt, at) | 0, b = b + Math.imul(Z, Zt) | 0, _ = _ + Math.imul(Z, at) | 0, l = l + Math.imul(P, Wt) | 0, b = b + Math.imul(P, ht) | 0, b = b + Math.imul(N, Wt) | 0, _ = _ + Math.imul(N, ht) | 0, l = l + Math.imul(q, Vt) | 0, b = b + Math.imul(q, st) | 0, b = b + Math.imul(O, Vt) | 0, _ = _ + Math.imul(O, st) | 0;
       var fe = (e + l | 0) + ((b & 8191) << 13) | 0;
-      e = (_ + (b >>> 13) | 0) + (fe >>> 26) | 0, fe &= 67108863, l = Math.imul(Ot, Tt), b = Math.imul(Ot, G), b = b + Math.imul(E, Tt) | 0, _ = Math.imul(E, G), l = l + Math.imul(Pt, Rt) | 0, b = b + Math.imul(Pt, it) | 0, b = b + Math.imul(Q, Rt) | 0, _ = _ + Math.imul(Q, it) | 0, l = l + Math.imul(Dt, Kt) | 0, b = b + Math.imul(Dt, nt) | 0, b = b + Math.imul(j, Kt) | 0, _ = _ + Math.imul(j, nt) | 0, l = l + Math.imul(Nt, Ht) | 0, b = b + Math.imul(Nt, ft) | 0, b = b + Math.imul(et, Ht) | 0, _ = _ + Math.imul(et, ft) | 0, l = l + Math.imul(Ft, Zt) | 0, b = b + Math.imul(Ft, at) | 0, b = b + Math.imul(tt, Zt) | 0, _ = _ + Math.imul(tt, at) | 0, l = l + Math.imul(kt, Wt) | 0, b = b + Math.imul(kt, ht) | 0, b = b + Math.imul(Z, Wt) | 0, _ = _ + Math.imul(Z, ht) | 0, l = l + Math.imul(P, Vt) | 0, b = b + Math.imul(P, st) | 0, b = b + Math.imul(N, Vt) | 0, _ = _ + Math.imul(N, st) | 0, l = l + Math.imul(q, Yt) | 0, b = b + Math.imul(q, ot) | 0, b = b + Math.imul(O, Yt) | 0, _ = _ + Math.imul(O, ot) | 0;
+      e = (_ + (b >>> 13) | 0) + (fe >>> 26) | 0, fe &= 67108863, l = Math.imul(Ot, Tt), b = Math.imul(Ot, G), b = b + Math.imul(E, Tt) | 0, _ = Math.imul(E, G), l = l + Math.imul(Pt, Rt) | 0, b = b + Math.imul(Pt, it) | 0, b = b + Math.imul(Q, Rt) | 0, _ = _ + Math.imul(Q, it) | 0, l = l + Math.imul(Dt, Kt) | 0, b = b + Math.imul(Dt, nt) | 0, b = b + Math.imul(j, Kt) | 0, _ = _ + Math.imul(j, nt) | 0, l = l + Math.imul(Nt, Ht) | 0, b = b + Math.imul(Nt, ft) | 0, b = b + Math.imul(et, Ht) | 0, _ = _ + Math.imul(et, ft) | 0, l = l + Math.imul(qt, Zt) | 0, b = b + Math.imul(qt, at) | 0, b = b + Math.imul(tt, Zt) | 0, _ = _ + Math.imul(tt, at) | 0, l = l + Math.imul(kt, Wt) | 0, b = b + Math.imul(kt, ht) | 0, b = b + Math.imul(Z, Wt) | 0, _ = _ + Math.imul(Z, ht) | 0, l = l + Math.imul(P, Vt) | 0, b = b + Math.imul(P, st) | 0, b = b + Math.imul(N, Vt) | 0, _ = _ + Math.imul(N, st) | 0, l = l + Math.imul(q, Yt) | 0, b = b + Math.imul(q, ot) | 0, b = b + Math.imul(O, Yt) | 0, _ = _ + Math.imul(O, ot) | 0;
       var ae = (e + l | 0) + ((b & 8191) << 13) | 0;
-      e = (_ + (b >>> 13) | 0) + (ae >>> 26) | 0, ae &= 67108863, l = Math.imul(A, Tt), b = Math.imul(A, G), b = b + Math.imul(T, Tt) | 0, _ = Math.imul(T, G), l = l + Math.imul(Ot, Rt) | 0, b = b + Math.imul(Ot, it) | 0, b = b + Math.imul(E, Rt) | 0, _ = _ + Math.imul(E, it) | 0, l = l + Math.imul(Pt, Kt) | 0, b = b + Math.imul(Pt, nt) | 0, b = b + Math.imul(Q, Kt) | 0, _ = _ + Math.imul(Q, nt) | 0, l = l + Math.imul(Dt, Ht) | 0, b = b + Math.imul(Dt, ft) | 0, b = b + Math.imul(j, Ht) | 0, _ = _ + Math.imul(j, ft) | 0, l = l + Math.imul(Nt, Zt) | 0, b = b + Math.imul(Nt, at) | 0, b = b + Math.imul(et, Zt) | 0, _ = _ + Math.imul(et, at) | 0, l = l + Math.imul(Ft, Wt) | 0, b = b + Math.imul(Ft, ht) | 0, b = b + Math.imul(tt, Wt) | 0, _ = _ + Math.imul(tt, ht) | 0, l = l + Math.imul(kt, Vt) | 0, b = b + Math.imul(kt, st) | 0, b = b + Math.imul(Z, Vt) | 0, _ = _ + Math.imul(Z, st) | 0, l = l + Math.imul(P, Yt) | 0, b = b + Math.imul(P, ot) | 0, b = b + Math.imul(N, Yt) | 0, _ = _ + Math.imul(N, ot) | 0, l = l + Math.imul(q, Jt) | 0, b = b + Math.imul(q, ut) | 0, b = b + Math.imul(O, Jt) | 0, _ = _ + Math.imul(O, ut) | 0;
+      e = (_ + (b >>> 13) | 0) + (ae >>> 26) | 0, ae &= 67108863, l = Math.imul(A, Tt), b = Math.imul(A, G), b = b + Math.imul(T, Tt) | 0, _ = Math.imul(T, G), l = l + Math.imul(Ot, Rt) | 0, b = b + Math.imul(Ot, it) | 0, b = b + Math.imul(E, Rt) | 0, _ = _ + Math.imul(E, it) | 0, l = l + Math.imul(Pt, Kt) | 0, b = b + Math.imul(Pt, nt) | 0, b = b + Math.imul(Q, Kt) | 0, _ = _ + Math.imul(Q, nt) | 0, l = l + Math.imul(Dt, Ht) | 0, b = b + Math.imul(Dt, ft) | 0, b = b + Math.imul(j, Ht) | 0, _ = _ + Math.imul(j, ft) | 0, l = l + Math.imul(Nt, Zt) | 0, b = b + Math.imul(Nt, at) | 0, b = b + Math.imul(et, Zt) | 0, _ = _ + Math.imul(et, at) | 0, l = l + Math.imul(qt, Wt) | 0, b = b + Math.imul(qt, ht) | 0, b = b + Math.imul(tt, Wt) | 0, _ = _ + Math.imul(tt, ht) | 0, l = l + Math.imul(kt, Vt) | 0, b = b + Math.imul(kt, st) | 0, b = b + Math.imul(Z, Vt) | 0, _ = _ + Math.imul(Z, st) | 0, l = l + Math.imul(P, Yt) | 0, b = b + Math.imul(P, ot) | 0, b = b + Math.imul(N, Yt) | 0, _ = _ + Math.imul(N, ot) | 0, l = l + Math.imul(q, Jt) | 0, b = b + Math.imul(q, ut) | 0, b = b + Math.imul(O, Jt) | 0, _ = _ + Math.imul(O, ut) | 0;
       var he = (e + l | 0) + ((b & 8191) << 13) | 0;
-      e = (_ + (b >>> 13) | 0) + (he >>> 26) | 0, he &= 67108863, l = Math.imul(V, Tt), b = Math.imul(V, G), b = b + Math.imul(L, Tt) | 0, _ = Math.imul(L, G), l = l + Math.imul(A, Rt) | 0, b = b + Math.imul(A, it) | 0, b = b + Math.imul(T, Rt) | 0, _ = _ + Math.imul(T, it) | 0, l = l + Math.imul(Ot, Kt) | 0, b = b + Math.imul(Ot, nt) | 0, b = b + Math.imul(E, Kt) | 0, _ = _ + Math.imul(E, nt) | 0, l = l + Math.imul(Pt, Ht) | 0, b = b + Math.imul(Pt, ft) | 0, b = b + Math.imul(Q, Ht) | 0, _ = _ + Math.imul(Q, ft) | 0, l = l + Math.imul(Dt, Zt) | 0, b = b + Math.imul(Dt, at) | 0, b = b + Math.imul(j, Zt) | 0, _ = _ + Math.imul(j, at) | 0, l = l + Math.imul(Nt, Wt) | 0, b = b + Math.imul(Nt, ht) | 0, b = b + Math.imul(et, Wt) | 0, _ = _ + Math.imul(et, ht) | 0, l = l + Math.imul(Ft, Vt) | 0, b = b + Math.imul(Ft, st) | 0, b = b + Math.imul(tt, Vt) | 0, _ = _ + Math.imul(tt, st) | 0, l = l + Math.imul(kt, Yt) | 0, b = b + Math.imul(kt, ot) | 0, b = b + Math.imul(Z, Yt) | 0, _ = _ + Math.imul(Z, ot) | 0, l = l + Math.imul(P, Jt) | 0, b = b + Math.imul(P, ut) | 0, b = b + Math.imul(N, Jt) | 0, _ = _ + Math.imul(N, ut) | 0, l = l + Math.imul(q, $t) | 0, b = b + Math.imul(q, Lt) | 0, b = b + Math.imul(O, $t) | 0, _ = _ + Math.imul(O, Lt) | 0;
+      e = (_ + (b >>> 13) | 0) + (he >>> 26) | 0, he &= 67108863, l = Math.imul(V, Tt), b = Math.imul(V, G), b = b + Math.imul(L, Tt) | 0, _ = Math.imul(L, G), l = l + Math.imul(A, Rt) | 0, b = b + Math.imul(A, it) | 0, b = b + Math.imul(T, Rt) | 0, _ = _ + Math.imul(T, it) | 0, l = l + Math.imul(Ot, Kt) | 0, b = b + Math.imul(Ot, nt) | 0, b = b + Math.imul(E, Kt) | 0, _ = _ + Math.imul(E, nt) | 0, l = l + Math.imul(Pt, Ht) | 0, b = b + Math.imul(Pt, ft) | 0, b = b + Math.imul(Q, Ht) | 0, _ = _ + Math.imul(Q, ft) | 0, l = l + Math.imul(Dt, Zt) | 0, b = b + Math.imul(Dt, at) | 0, b = b + Math.imul(j, Zt) | 0, _ = _ + Math.imul(j, at) | 0, l = l + Math.imul(Nt, Wt) | 0, b = b + Math.imul(Nt, ht) | 0, b = b + Math.imul(et, Wt) | 0, _ = _ + Math.imul(et, ht) | 0, l = l + Math.imul(qt, Vt) | 0, b = b + Math.imul(qt, st) | 0, b = b + Math.imul(tt, Vt) | 0, _ = _ + Math.imul(tt, st) | 0, l = l + Math.imul(kt, Yt) | 0, b = b + Math.imul(kt, ot) | 0, b = b + Math.imul(Z, Yt) | 0, _ = _ + Math.imul(Z, ot) | 0, l = l + Math.imul(P, Jt) | 0, b = b + Math.imul(P, ut) | 0, b = b + Math.imul(N, Jt) | 0, _ = _ + Math.imul(N, ut) | 0, l = l + Math.imul(q, $t) | 0, b = b + Math.imul(q, Lt) | 0, b = b + Math.imul(O, $t) | 0, _ = _ + Math.imul(O, Lt) | 0;
       var se = (e + l | 0) + ((b & 8191) << 13) | 0;
-      e = (_ + (b >>> 13) | 0) + (se >>> 26) | 0, se &= 67108863, l = Math.imul(V, Rt), b = Math.imul(V, it), b = b + Math.imul(L, Rt) | 0, _ = Math.imul(L, it), l = l + Math.imul(A, Kt) | 0, b = b + Math.imul(A, nt) | 0, b = b + Math.imul(T, Kt) | 0, _ = _ + Math.imul(T, nt) | 0, l = l + Math.imul(Ot, Ht) | 0, b = b + Math.imul(Ot, ft) | 0, b = b + Math.imul(E, Ht) | 0, _ = _ + Math.imul(E, ft) | 0, l = l + Math.imul(Pt, Zt) | 0, b = b + Math.imul(Pt, at) | 0, b = b + Math.imul(Q, Zt) | 0, _ = _ + Math.imul(Q, at) | 0, l = l + Math.imul(Dt, Wt) | 0, b = b + Math.imul(Dt, ht) | 0, b = b + Math.imul(j, Wt) | 0, _ = _ + Math.imul(j, ht) | 0, l = l + Math.imul(Nt, Vt) | 0, b = b + Math.imul(Nt, st) | 0, b = b + Math.imul(et, Vt) | 0, _ = _ + Math.imul(et, st) | 0, l = l + Math.imul(Ft, Yt) | 0, b = b + Math.imul(Ft, ot) | 0, b = b + Math.imul(tt, Yt) | 0, _ = _ + Math.imul(tt, ot) | 0, l = l + Math.imul(kt, Jt) | 0, b = b + Math.imul(kt, ut) | 0, b = b + Math.imul(Z, Jt) | 0, _ = _ + Math.imul(Z, ut) | 0, l = l + Math.imul(P, $t) | 0, b = b + Math.imul(P, Lt) | 0, b = b + Math.imul(N, $t) | 0, _ = _ + Math.imul(N, Lt) | 0;
+      e = (_ + (b >>> 13) | 0) + (se >>> 26) | 0, se &= 67108863, l = Math.imul(V, Rt), b = Math.imul(V, it), b = b + Math.imul(L, Rt) | 0, _ = Math.imul(L, it), l = l + Math.imul(A, Kt) | 0, b = b + Math.imul(A, nt) | 0, b = b + Math.imul(T, Kt) | 0, _ = _ + Math.imul(T, nt) | 0, l = l + Math.imul(Ot, Ht) | 0, b = b + Math.imul(Ot, ft) | 0, b = b + Math.imul(E, Ht) | 0, _ = _ + Math.imul(E, ft) | 0, l = l + Math.imul(Pt, Zt) | 0, b = b + Math.imul(Pt, at) | 0, b = b + Math.imul(Q, Zt) | 0, _ = _ + Math.imul(Q, at) | 0, l = l + Math.imul(Dt, Wt) | 0, b = b + Math.imul(Dt, ht) | 0, b = b + Math.imul(j, Wt) | 0, _ = _ + Math.imul(j, ht) | 0, l = l + Math.imul(Nt, Vt) | 0, b = b + Math.imul(Nt, st) | 0, b = b + Math.imul(et, Vt) | 0, _ = _ + Math.imul(et, st) | 0, l = l + Math.imul(qt, Yt) | 0, b = b + Math.imul(qt, ot) | 0, b = b + Math.imul(tt, Yt) | 0, _ = _ + Math.imul(tt, ot) | 0, l = l + Math.imul(kt, Jt) | 0, b = b + Math.imul(kt, ut) | 0, b = b + Math.imul(Z, Jt) | 0, _ = _ + Math.imul(Z, ut) | 0, l = l + Math.imul(P, $t) | 0, b = b + Math.imul(P, Lt) | 0, b = b + Math.imul(N, $t) | 0, _ = _ + Math.imul(N, Lt) | 0;
       var oe = (e + l | 0) + ((b & 8191) << 13) | 0;
-      e = (_ + (b >>> 13) | 0) + (oe >>> 26) | 0, oe &= 67108863, l = Math.imul(V, Kt), b = Math.imul(V, nt), b = b + Math.imul(L, Kt) | 0, _ = Math.imul(L, nt), l = l + Math.imul(A, Ht) | 0, b = b + Math.imul(A, ft) | 0, b = b + Math.imul(T, Ht) | 0, _ = _ + Math.imul(T, ft) | 0, l = l + Math.imul(Ot, Zt) | 0, b = b + Math.imul(Ot, at) | 0, b = b + Math.imul(E, Zt) | 0, _ = _ + Math.imul(E, at) | 0, l = l + Math.imul(Pt, Wt) | 0, b = b + Math.imul(Pt, ht) | 0, b = b + Math.imul(Q, Wt) | 0, _ = _ + Math.imul(Q, ht) | 0, l = l + Math.imul(Dt, Vt) | 0, b = b + Math.imul(Dt, st) | 0, b = b + Math.imul(j, Vt) | 0, _ = _ + Math.imul(j, st) | 0, l = l + Math.imul(Nt, Yt) | 0, b = b + Math.imul(Nt, ot) | 0, b = b + Math.imul(et, Yt) | 0, _ = _ + Math.imul(et, ot) | 0, l = l + Math.imul(Ft, Jt) | 0, b = b + Math.imul(Ft, ut) | 0, b = b + Math.imul(tt, Jt) | 0, _ = _ + Math.imul(tt, ut) | 0, l = l + Math.imul(kt, $t) | 0, b = b + Math.imul(kt, Lt) | 0, b = b + Math.imul(Z, $t) | 0, _ = _ + Math.imul(Z, Lt) | 0;
+      e = (_ + (b >>> 13) | 0) + (oe >>> 26) | 0, oe &= 67108863, l = Math.imul(V, Kt), b = Math.imul(V, nt), b = b + Math.imul(L, Kt) | 0, _ = Math.imul(L, nt), l = l + Math.imul(A, Ht) | 0, b = b + Math.imul(A, ft) | 0, b = b + Math.imul(T, Ht) | 0, _ = _ + Math.imul(T, ft) | 0, l = l + Math.imul(Ot, Zt) | 0, b = b + Math.imul(Ot, at) | 0, b = b + Math.imul(E, Zt) | 0, _ = _ + Math.imul(E, at) | 0, l = l + Math.imul(Pt, Wt) | 0, b = b + Math.imul(Pt, ht) | 0, b = b + Math.imul(Q, Wt) | 0, _ = _ + Math.imul(Q, ht) | 0, l = l + Math.imul(Dt, Vt) | 0, b = b + Math.imul(Dt, st) | 0, b = b + Math.imul(j, Vt) | 0, _ = _ + Math.imul(j, st) | 0, l = l + Math.imul(Nt, Yt) | 0, b = b + Math.imul(Nt, ot) | 0, b = b + Math.imul(et, Yt) | 0, _ = _ + Math.imul(et, ot) | 0, l = l + Math.imul(qt, Jt) | 0, b = b + Math.imul(qt, ut) | 0, b = b + Math.imul(tt, Jt) | 0, _ = _ + Math.imul(tt, ut) | 0, l = l + Math.imul(kt, $t) | 0, b = b + Math.imul(kt, Lt) | 0, b = b + Math.imul(Z, $t) | 0, _ = _ + Math.imul(Z, Lt) | 0;
       var ue = (e + l | 0) + ((b & 8191) << 13) | 0;
-      e = (_ + (b >>> 13) | 0) + (ue >>> 26) | 0, ue &= 67108863, l = Math.imul(V, Ht), b = Math.imul(V, ft), b = b + Math.imul(L, Ht) | 0, _ = Math.imul(L, ft), l = l + Math.imul(A, Zt) | 0, b = b + Math.imul(A, at) | 0, b = b + Math.imul(T, Zt) | 0, _ = _ + Math.imul(T, at) | 0, l = l + Math.imul(Ot, Wt) | 0, b = b + Math.imul(Ot, ht) | 0, b = b + Math.imul(E, Wt) | 0, _ = _ + Math.imul(E, ht) | 0, l = l + Math.imul(Pt, Vt) | 0, b = b + Math.imul(Pt, st) | 0, b = b + Math.imul(Q, Vt) | 0, _ = _ + Math.imul(Q, st) | 0, l = l + Math.imul(Dt, Yt) | 0, b = b + Math.imul(Dt, ot) | 0, b = b + Math.imul(j, Yt) | 0, _ = _ + Math.imul(j, ot) | 0, l = l + Math.imul(Nt, Jt) | 0, b = b + Math.imul(Nt, ut) | 0, b = b + Math.imul(et, Jt) | 0, _ = _ + Math.imul(et, ut) | 0, l = l + Math.imul(Ft, $t) | 0, b = b + Math.imul(Ft, Lt) | 0, b = b + Math.imul(tt, $t) | 0, _ = _ + Math.imul(tt, Lt) | 0;
+      e = (_ + (b >>> 13) | 0) + (ue >>> 26) | 0, ue &= 67108863, l = Math.imul(V, Ht), b = Math.imul(V, ft), b = b + Math.imul(L, Ht) | 0, _ = Math.imul(L, ft), l = l + Math.imul(A, Zt) | 0, b = b + Math.imul(A, at) | 0, b = b + Math.imul(T, Zt) | 0, _ = _ + Math.imul(T, at) | 0, l = l + Math.imul(Ot, Wt) | 0, b = b + Math.imul(Ot, ht) | 0, b = b + Math.imul(E, Wt) | 0, _ = _ + Math.imul(E, ht) | 0, l = l + Math.imul(Pt, Vt) | 0, b = b + Math.imul(Pt, st) | 0, b = b + Math.imul(Q, Vt) | 0, _ = _ + Math.imul(Q, st) | 0, l = l + Math.imul(Dt, Yt) | 0, b = b + Math.imul(Dt, ot) | 0, b = b + Math.imul(j, Yt) | 0, _ = _ + Math.imul(j, ot) | 0, l = l + Math.imul(Nt, Jt) | 0, b = b + Math.imul(Nt, ut) | 0, b = b + Math.imul(et, Jt) | 0, _ = _ + Math.imul(et, ut) | 0, l = l + Math.imul(qt, $t) | 0, b = b + Math.imul(qt, Lt) | 0, b = b + Math.imul(tt, $t) | 0, _ = _ + Math.imul(tt, Lt) | 0;
       var le = (e + l | 0) + ((b & 8191) << 13) | 0;
       e = (_ + (b >>> 13) | 0) + (le >>> 26) | 0, le &= 67108863, l = Math.imul(V, Zt), b = Math.imul(V, at), b = b + Math.imul(L, Zt) | 0, _ = Math.imul(L, at), l = l + Math.imul(A, Wt) | 0, b = b + Math.imul(A, ht) | 0, b = b + Math.imul(T, Wt) | 0, _ = _ + Math.imul(T, ht) | 0, l = l + Math.imul(Ot, Vt) | 0, b = b + Math.imul(Ot, st) | 0, b = b + Math.imul(E, Vt) | 0, _ = _ + Math.imul(E, st) | 0, l = l + Math.imul(Pt, Yt) | 0, b = b + Math.imul(Pt, ot) | 0, b = b + Math.imul(Q, Yt) | 0, _ = _ + Math.imul(Q, ot) | 0, l = l + Math.imul(Dt, Jt) | 0, b = b + Math.imul(Dt, ut) | 0, b = b + Math.imul(j, Jt) | 0, _ = _ + Math.imul(j, ut) | 0, l = l + Math.imul(Nt, $t) | 0, b = b + Math.imul(Nt, Lt) | 0, b = b + Math.imul(et, $t) | 0, _ = _ + Math.imul(et, Lt) | 0;
       var de = (e + l | 0) + ((b & 8191) << 13) | 0;
@@ -10855,7 +10855,7 @@ Z0.exports;
       return u !== 0 ? r.words[e] = u | 0 : r.length--, r.strip();
     }
     var U = function(t, r, i) {
-      var h = t.words, d = r.words, c = i.words, v = 0, u, e, l, b = h[0] | 0, _ = b & 8191, C = b >>> 13, q = h[1] | 0, O = q & 8191, R = q >>> 13, P = h[2] | 0, N = P & 8191, K = P >>> 13, kt = h[3] | 0, Z = kt & 8191, J = kt >>> 13, Ft = h[4] | 0, tt = Ft & 8191, vt = Ft >>> 13, Nt = h[5] | 0, et = Nt & 8191, pt = Nt >>> 13, Dt = h[6] | 0, j = Dt & 8191, dt = Dt >>> 13, Pt = h[7] | 0, Q = Pt & 8191, ct = Pt >>> 13, Ot = h[8] | 0, E = Ot & 8191, M = Ot >>> 13, A = h[9] | 0, T = A & 8191, F = A >>> 13, V = d[0] | 0, L = V & 8191, X = V >>> 13, Tt = d[1] | 0, G = Tt & 8191, rt = Tt >>> 13, Rt = d[2] | 0, it = Rt & 8191, gt = Rt >>> 13, Kt = d[3] | 0, nt = Kt & 8191, bt = Kt >>> 13, Ht = d[4] | 0, ft = Ht & 8191, yt = Ht >>> 13, Zt = d[5] | 0, at = Zt & 8191, wt = Zt >>> 13, Wt = d[6] | 0, ht = Wt & 8191, Mt = Wt >>> 13, Vt = d[7] | 0, st = Vt & 8191, xt = Vt >>> 13, Yt = d[8] | 0, ot = Yt & 8191, _t = Yt >>> 13, Jt = d[9] | 0, ut = Jt & 8191, St = Jt >>> 13;
+      var h = t.words, d = r.words, c = i.words, v = 0, u, e, l, b = h[0] | 0, _ = b & 8191, C = b >>> 13, q = h[1] | 0, O = q & 8191, R = q >>> 13, P = h[2] | 0, N = P & 8191, K = P >>> 13, kt = h[3] | 0, Z = kt & 8191, J = kt >>> 13, qt = h[4] | 0, tt = qt & 8191, vt = qt >>> 13, Nt = h[5] | 0, et = Nt & 8191, pt = Nt >>> 13, Dt = h[6] | 0, j = Dt & 8191, dt = Dt >>> 13, Pt = h[7] | 0, Q = Pt & 8191, ct = Pt >>> 13, Ot = h[8] | 0, E = Ot & 8191, M = Ot >>> 13, A = h[9] | 0, T = A & 8191, F = A >>> 13, V = d[0] | 0, L = V & 8191, X = V >>> 13, Tt = d[1] | 0, G = Tt & 8191, rt = Tt >>> 13, Rt = d[2] | 0, it = Rt & 8191, gt = Rt >>> 13, Kt = d[3] | 0, nt = Kt & 8191, bt = Kt >>> 13, Ht = d[4] | 0, ft = Ht & 8191, yt = Ht >>> 13, Zt = d[5] | 0, at = Zt & 8191, wt = Zt >>> 13, Wt = d[6] | 0, ht = Wt & 8191, Mt = Wt >>> 13, Vt = d[7] | 0, st = Vt & 8191, xt = Vt >>> 13, Yt = d[8] | 0, ot = Yt & 8191, _t = Yt >>> 13, Jt = d[9] | 0, ut = Jt & 8191, St = Jt >>> 13;
       i.negative = t.negative ^ r.negative, i.length = 19, u = Math.imul(_, L), e = Math.imul(_, X), e = e + Math.imul(C, L) | 0, l = Math.imul(C, X);
       var $t = (v + u | 0) + ((e & 8191) << 13) | 0;
       v = (l + (e >>> 13) | 0) + ($t >>> 26) | 0, $t &= 67108863, u = Math.imul(O, L), e = Math.imul(O, X), e = e + Math.imul(R, L) | 0, l = Math.imul(R, X), u = u + Math.imul(_, G) | 0, e = e + Math.imul(_, rt) | 0, e = e + Math.imul(C, G) | 0, l = l + Math.imul(C, rt) | 0;
@@ -15367,7 +15367,7 @@ X0.exports;
       return u !== 0 ? r.words[e] = u | 0 : r.length--, r.strip();
     }
     var U = function(t, r, i) {
-      var h = t.words, d = r.words, c = i.words, v = 0, u, e, l, b = h[0] | 0, _ = b & 8191, C = b >>> 13, q = h[1] | 0, O = q & 8191, R = q >>> 13, P = h[2] | 0, N = P & 8191, K = P >>> 13, kt = h[3] | 0, Z = kt & 8191, J = kt >>> 13, Ft = h[4] | 0, tt = Ft & 8191, vt = Ft >>> 13, Nt = h[5] | 0, et = Nt & 8191, pt = Nt >>> 13, Dt = h[6] | 0, j = Dt & 8191, dt = Dt >>> 13, Pt = h[7] | 0, Q = Pt & 8191, ct = Pt >>> 13, Ot = h[8] | 0, E = Ot & 8191, M = Ot >>> 13, A = h[9] | 0, T = A & 8191, F = A >>> 13, V = d[0] | 0, L = V & 8191, X = V >>> 13, Tt = d[1] | 0, G = Tt & 8191, rt = Tt >>> 13, Rt = d[2] | 0, it = Rt & 8191, gt = Rt >>> 13, Kt = d[3] | 0, nt = Kt & 8191, bt = Kt >>> 13, Ht = d[4] | 0, ft = Ht & 8191, yt = Ht >>> 13, Zt = d[5] | 0, at = Zt & 8191, wt = Zt >>> 13, Wt = d[6] | 0, ht = Wt & 8191, Mt = Wt >>> 13, Vt = d[7] | 0, st = Vt & 8191, xt = Vt >>> 13, Yt = d[8] | 0, ot = Yt & 8191, _t = Yt >>> 13, Jt = d[9] | 0, ut = Jt & 8191, St = Jt >>> 13;
+      var h = t.words, d = r.words, c = i.words, v = 0, u, e, l, b = h[0] | 0, _ = b & 8191, C = b >>> 13, q = h[1] | 0, O = q & 8191, R = q >>> 13, P = h[2] | 0, N = P & 8191, K = P >>> 13, kt = h[3] | 0, Z = kt & 8191, J = kt >>> 13, qt = h[4] | 0, tt = qt & 8191, vt = qt >>> 13, Nt = h[5] | 0, et = Nt & 8191, pt = Nt >>> 13, Dt = h[6] | 0, j = Dt & 8191, dt = Dt >>> 13, Pt = h[7] | 0, Q = Pt & 8191, ct = Pt >>> 13, Ot = h[8] | 0, E = Ot & 8191, M = Ot >>> 13, A = h[9] | 0, T = A & 8191, F = A >>> 13, V = d[0] | 0, L = V & 8191, X = V >>> 13, Tt = d[1] | 0, G = Tt & 8191, rt = Tt >>> 13, Rt = d[2] | 0, it = Rt & 8191, gt = Rt >>> 13, Kt = d[3] | 0, nt = Kt & 8191, bt = Kt >>> 13, Ht = d[4] | 0, ft = Ht & 8191, yt = Ht >>> 13, Zt = d[5] | 0, at = Zt & 8191, wt = Zt >>> 13, Wt = d[6] | 0, ht = Wt & 8191, Mt = Wt >>> 13, Vt = d[7] | 0, st = Vt & 8191, xt = Vt >>> 13, Yt = d[8] | 0, ot = Yt & 8191, _t = Yt >>> 13, Jt = d[9] | 0, ut = Jt & 8191, St = Jt >>> 13;
       i.negative = t.negative ^ r.negative, i.length = 19, u = Math.imul(_, L), e = Math.imul(_, X), e = e + Math.imul(C, L) | 0, l = Math.imul(C, X);
       var $t = (v + u | 0) + ((e & 8191) << 13) | 0;
       v = (l + (e >>> 13) | 0) + ($t >>> 26) | 0, $t &= 67108863, u = Math.imul(O, L), e = Math.imul(O, X), e = e + Math.imul(R, L) | 0, l = Math.imul(R, X), u = u + Math.imul(_, G) | 0, e = e + Math.imul(_, rt) | 0, e = e + Math.imul(C, G) | 0, l = l + Math.imul(C, rt) | 0;
@@ -17949,7 +17949,7 @@ Q0.exports;
       return u !== 0 ? r.words[e] = u | 0 : r.length--, r.strip();
     }
     var U = function(t, r, i) {
-      var h = t.words, d = r.words, c = i.words, v = 0, u, e, l, b = h[0] | 0, _ = b & 8191, C = b >>> 13, q = h[1] | 0, O = q & 8191, R = q >>> 13, P = h[2] | 0, N = P & 8191, K = P >>> 13, kt = h[3] | 0, Z = kt & 8191, J = kt >>> 13, Ft = h[4] | 0, tt = Ft & 8191, vt = Ft >>> 13, Nt = h[5] | 0, et = Nt & 8191, pt = Nt >>> 13, Dt = h[6] | 0, j = Dt & 8191, dt = Dt >>> 13, Pt = h[7] | 0, Q = Pt & 8191, ct = Pt >>> 13, Ot = h[8] | 0, E = Ot & 8191, M = Ot >>> 13, A = h[9] | 0, T = A & 8191, F = A >>> 13, V = d[0] | 0, L = V & 8191, X = V >>> 13, Tt = d[1] | 0, G = Tt & 8191, rt = Tt >>> 13, Rt = d[2] | 0, it = Rt & 8191, gt = Rt >>> 13, Kt = d[3] | 0, nt = Kt & 8191, bt = Kt >>> 13, Ht = d[4] | 0, ft = Ht & 8191, yt = Ht >>> 13, Zt = d[5] | 0, at = Zt & 8191, wt = Zt >>> 13, Wt = d[6] | 0, ht = Wt & 8191, Mt = Wt >>> 13, Vt = d[7] | 0, st = Vt & 8191, xt = Vt >>> 13, Yt = d[8] | 0, ot = Yt & 8191, _t = Yt >>> 13, Jt = d[9] | 0, ut = Jt & 8191, St = Jt >>> 13;
+      var h = t.words, d = r.words, c = i.words, v = 0, u, e, l, b = h[0] | 0, _ = b & 8191, C = b >>> 13, q = h[1] | 0, O = q & 8191, R = q >>> 13, P = h[2] | 0, N = P & 8191, K = P >>> 13, kt = h[3] | 0, Z = kt & 8191, J = kt >>> 13, qt = h[4] | 0, tt = qt & 8191, vt = qt >>> 13, Nt = h[5] | 0, et = Nt & 8191, pt = Nt >>> 13, Dt = h[6] | 0, j = Dt & 8191, dt = Dt >>> 13, Pt = h[7] | 0, Q = Pt & 8191, ct = Pt >>> 13, Ot = h[8] | 0, E = Ot & 8191, M = Ot >>> 13, A = h[9] | 0, T = A & 8191, F = A >>> 13, V = d[0] | 0, L = V & 8191, X = V >>> 13, Tt = d[1] | 0, G = Tt & 8191, rt = Tt >>> 13, Rt = d[2] | 0, it = Rt & 8191, gt = Rt >>> 13, Kt = d[3] | 0, nt = Kt & 8191, bt = Kt >>> 13, Ht = d[4] | 0, ft = Ht & 8191, yt = Ht >>> 13, Zt = d[5] | 0, at = Zt & 8191, wt = Zt >>> 13, Wt = d[6] | 0, ht = Wt & 8191, Mt = Wt >>> 13, Vt = d[7] | 0, st = Vt & 8191, xt = Vt >>> 13, Yt = d[8] | 0, ot = Yt & 8191, _t = Yt >>> 13, Jt = d[9] | 0, ut = Jt & 8191, St = Jt >>> 13;
       i.negative = t.negative ^ r.negative, i.length = 19, u = Math.imul(_, L), e = Math.imul(_, X), e = e + Math.imul(C, L) | 0, l = Math.imul(C, X);
       var $t = (v + u | 0) + ((e & 8191) << 13) | 0;
       v = (l + (e >>> 13) | 0) + ($t >>> 26) | 0, $t &= 67108863, u = Math.imul(O, L), e = Math.imul(O, X), e = e + Math.imul(R, L) | 0, l = Math.imul(R, X), u = u + Math.imul(_, G) | 0, e = e + Math.imul(_, rt) | 0, e = e + Math.imul(C, G) | 0, l = l + Math.imul(C, rt) | 0;
@@ -19216,7 +19216,7 @@ ta.exports;
       return u !== 0 ? r.words[e] = u | 0 : r.length--, r.strip();
     }
     var U = function(t, r, i) {
-      var h = t.words, d = r.words, c = i.words, v = 0, u, e, l, b = h[0] | 0, _ = b & 8191, C = b >>> 13, q = h[1] | 0, O = q & 8191, R = q >>> 13, P = h[2] | 0, N = P & 8191, K = P >>> 13, kt = h[3] | 0, Z = kt & 8191, J = kt >>> 13, Ft = h[4] | 0, tt = Ft & 8191, vt = Ft >>> 13, Nt = h[5] | 0, et = Nt & 8191, pt = Nt >>> 13, Dt = h[6] | 0, j = Dt & 8191, dt = Dt >>> 13, Pt = h[7] | 0, Q = Pt & 8191, ct = Pt >>> 13, Ot = h[8] | 0, E = Ot & 8191, M = Ot >>> 13, A = h[9] | 0, T = A & 8191, F = A >>> 13, V = d[0] | 0, L = V & 8191, X = V >>> 13, Tt = d[1] | 0, G = Tt & 8191, rt = Tt >>> 13, Rt = d[2] | 0, it = Rt & 8191, gt = Rt >>> 13, Kt = d[3] | 0, nt = Kt & 8191, bt = Kt >>> 13, Ht = d[4] | 0, ft = Ht & 8191, yt = Ht >>> 13, Zt = d[5] | 0, at = Zt & 8191, wt = Zt >>> 13, Wt = d[6] | 0, ht = Wt & 8191, Mt = Wt >>> 13, Vt = d[7] | 0, st = Vt & 8191, xt = Vt >>> 13, Yt = d[8] | 0, ot = Yt & 8191, _t = Yt >>> 13, Jt = d[9] | 0, ut = Jt & 8191, St = Jt >>> 13;
+      var h = t.words, d = r.words, c = i.words, v = 0, u, e, l, b = h[0] | 0, _ = b & 8191, C = b >>> 13, q = h[1] | 0, O = q & 8191, R = q >>> 13, P = h[2] | 0, N = P & 8191, K = P >>> 13, kt = h[3] | 0, Z = kt & 8191, J = kt >>> 13, qt = h[4] | 0, tt = qt & 8191, vt = qt >>> 13, Nt = h[5] | 0, et = Nt & 8191, pt = Nt >>> 13, Dt = h[6] | 0, j = Dt & 8191, dt = Dt >>> 13, Pt = h[7] | 0, Q = Pt & 8191, ct = Pt >>> 13, Ot = h[8] | 0, E = Ot & 8191, M = Ot >>> 13, A = h[9] | 0, T = A & 8191, F = A >>> 13, V = d[0] | 0, L = V & 8191, X = V >>> 13, Tt = d[1] | 0, G = Tt & 8191, rt = Tt >>> 13, Rt = d[2] | 0, it = Rt & 8191, gt = Rt >>> 13, Kt = d[3] | 0, nt = Kt & 8191, bt = Kt >>> 13, Ht = d[4] | 0, ft = Ht & 8191, yt = Ht >>> 13, Zt = d[5] | 0, at = Zt & 8191, wt = Zt >>> 13, Wt = d[6] | 0, ht = Wt & 8191, Mt = Wt >>> 13, Vt = d[7] | 0, st = Vt & 8191, xt = Vt >>> 13, Yt = d[8] | 0, ot = Yt & 8191, _t = Yt >>> 13, Jt = d[9] | 0, ut = Jt & 8191, St = Jt >>> 13;
       i.negative = t.negative ^ r.negative, i.length = 19, u = Math.imul(_, L), e = Math.imul(_, X), e = e + Math.imul(C, L) | 0, l = Math.imul(C, X);
       var $t = (v + u | 0) + ((e & 8191) << 13) | 0;
       v = (l + (e >>> 13) | 0) + ($t >>> 26) | 0, $t &= 67108863, u = Math.imul(O, L), e = Math.imul(O, X), e = e + Math.imul(R, L) | 0, l = Math.imul(R, X), u = u + Math.imul(_, G) | 0, e = e + Math.imul(_, rt) | 0, e = e + Math.imul(C, G) | 0, l = l + Math.imul(C, rt) | 0;
@@ -20319,16 +20319,16 @@ class Ag {
       saveFlags: fu,
       loadContext: au,
       saveContext: hu
-    }, this.context = n.context || {}, this.rawFlags = (y = n.rawFlags) != null ? y : {}, this.previewMode = n.previewMode || !1, this.deferInitialization = (S = n.deferInitialization) != null ? S : !1, this.env = n.env, this.enableFlagmint = (B = n.enableFlagmint) != null ? B : !0, qt.setup({ debugLog: n.debugLog }), this.previewMode && this.rawFlags && Object.keys(this.rawFlags).length > 0) {
+    }, this.context = n.context || {}, this.rawFlags = (y = n.rawFlags) != null ? y : {}, this.previewMode = n.previewMode || !1, this.deferInitialization = (S = n.deferInitialization) != null ? S : !1, this.env = n.env, this.enableFlagmint = (B = n.enableFlagmint) != null ? B : !0, Ft.setup({ debugLog: n.debugLog }), this.previewMode && this.rawFlags && Object.keys(this.rawFlags).length > 0) {
       this.flags = this.evaluateLocally(this.rawFlags, this.context), this.readyPromise = Promise.resolve(), this.resolveReady = () => {
       }, this.rejectReady = () => {
       }, this.isInitialized = !0;
       return;
     } else
-      this.previewMode && !this.rawFlags && qt.error("[FlagClient] No raw flags provided for preview mode. Defaulting to remote fetch.");
+      this.previewMode && !this.rawFlags && Ft.error("[FlagClient] No raw flags provided for preview mode. Defaulting to remote fetch.");
     this.readyPromise = new Promise((w, x) => {
       this.resolveReady = w, this.rejectReady = x;
-    }), this.enableFlagmint ? this.deferInitialization ? (qt.log("[FlagClient] Initialization deferred. Call ready() to initialize."), this.initializationOptions = n) : this.initialize(n) : qt.log("[FlagClient] Flagmint connection disabled. Skipping initialization.");
+    }), this.enableFlagmint ? this.deferInitialization ? (Ft.log("[FlagClient] Initialization deferred. Call ready() to initialize."), this.initializationOptions = n) : this.initialize(n) : Ft.log("[FlagClient] Flagmint connection disabled. Skipping initialization.");
   }
   /**
    * Initializes the client by loading cached flags and context, setting up the transport layer.
@@ -20336,8 +20336,8 @@ class Ag {
   initialize(n) {
     return Ie(this, null, function* () {
       var o;
-      if (qt.log("[FlagClient] Initialization started"), this.isInitialized) {
-        qt.log("[FlagClient] Already initialized, skipping.");
+      if (Ft.log("[FlagClient] Initialization started"), this.isInitialized) {
+        Ft.log("[FlagClient] Already initialized, skipping.");
         return;
       }
       try {
@@ -20356,7 +20356,7 @@ class Ag {
         yield this.setupTransport(n), this.isInitialized = !0, this.resolveReady();
       } catch (s) {
         const m = s instanceof Error ? s : new Error(String(s));
-        qt.error("[FlagClient] Initialization failed:", m), Object.keys(this.flags).length > 0 ? qt.warn("[FlagClient] Transport connection failed. Serving cached flags in degraded mode.") : qt.warn("[FlagClient] Transport connection failed. No cached flags — getFlag() will return fallback values."), (o = this.onError) == null || o.call(this, m), this.isInitialized = !0, this.resolveReady();
+        Ft.error("[FlagClient] Initialization failed:", m), Object.keys(this.flags).length > 0 ? Ft.warn("[FlagClient] Transport connection failed. Serving cached flags in degraded mode.") : Ft.warn("[FlagClient] Transport connection failed. No cached flags — getFlag() will return fallback values."), (o = this.onError) == null || o.call(this, m), this.isInitialized = !0, this.resolveReady();
       }
     });
   }
@@ -20365,23 +20365,30 @@ class Ag {
    */
   setupTransport(n) {
     return Ie(this, null, function* () {
-      var g;
-      qt.log("[FlagClient] setupTransport() started");
-      const o = (g = n.transportMode) != null ? g : "auto", s = () => Ie(this, null, function* () {
-        qt.log("[FlagClient] Initializing WebSocket transport...");
-        const y = new ku(this.wsEndpoint, this.apiKey);
-        return yield y.init(), qt.log("[FlagClient] WebSocket transport initialized"), y;
+      var f;
+      if (Ft.log("[FlagClient] setupTransport() started"), n.transport) {
+        Ft.log("[FlagClient] Using injected transport"), this.transport = n.transport, typeof this.transport.onFlagsUpdated == "function" && this.transport.onFlagsUpdated((y) => {
+          Ft.log("[FlagClient] Flags updated via injected transport:", y), this.updateFlags(y);
+        });
+        const g = yield this.transport.fetchFlags(this.context);
+        this.updateFlags(g);
+        return;
+      }
+      const o = (f = n.transportMode) != null ? f : "auto", s = () => Ie(this, null, function* () {
+        Ft.log("[FlagClient] Initializing WebSocket transport...");
+        const g = new ku(this.wsEndpoint, this.apiKey);
+        return yield g.init(), Ft.log("[FlagClient] WebSocket transport initialized"), g;
       }), m = () => {
-        const y = new Eu(this.restEndpoint, this.apiKey, this.context, {
+        const g = new Eu(this.restEndpoint, this.apiKey, this.context, {
           pollIntervalMs: 12e5,
           maxBackoffMs: 6e4,
           // 1min max backoff
           backoffMultiplier: 2
           // Double each time
         });
-        return y.onFlagsUpdated((S) => {
-          qt.log("[FlagClient] Flags updated via long polling:", S), this.updateFlags(S);
-        }), y.init(), y;
+        return g.onFlagsUpdated((y) => {
+          Ft.log("[FlagClient] Flags updated via long polling:", y), this.updateFlags(y);
+        }), g.init(), g;
       };
       if (o === "websocket")
         this.transport = yield s();
@@ -20390,24 +20397,37 @@ class Ag {
       else
         try {
           this.transport = yield s();
-        } catch (y) {
-          const S = y.code;
-          if (S === "ERR_AUTH" || S === "ERR_RATE_LIMITED")
-            throw y;
-          qt.warn("[FlagClient] WebSocket failed, falling back to long polling"), this.transport = m();
+        } catch (g) {
+          const y = g.code;
+          if (y === "ERR_AUTH" || y === "ERR_RATE_LIMITED")
+            throw g;
+          Ft.warn("[FlagClient] WebSocket failed, falling back to long polling"), this.transport = m();
         }
-      typeof this.transport.onFlagsUpdated == "function" && this.transport.onFlagsUpdated((y) => {
-        qt.log("[FlagClient] Flags updated via transport:", y), this.updateFlags(y);
-      });
-      const f = yield this.transport.fetchFlags(this.context);
-      this.updateFlags(f);
+      if (typeof this.transport.onFlagsUpdated == "function" && this.transport.onFlagsUpdated((g) => {
+        Ft.log("[FlagClient] Flags updated via transport:", g), this.updateFlags(g);
+      }), o !== "long-polling") {
+        const g = yield this.transport.fetchFlags(this.context);
+        this.updateFlags(g);
+      }
     });
   }
   /**
    * Updates flags and notifies all subscribers.
    * This is the centralized method for any flag update.
+   * 
+   * Task 2: Guard against empty payload overwrites.
+   * If newFlags is empty and this.flags is non-empty, skip the overwrite
+   * and surface via onError instead.
    */
   updateFlags(n) {
+    var m;
+    const o = Object.keys(n).length === 0, s = Object.keys(this.flags).length > 0;
+    if (o && s) {
+      Ft.warn("[FlagClient] Received empty flags payload while cache is non-empty. Preserving cache.");
+      const f = new Error("Empty flags payload received but cache preserved");
+      f.code = "ERR_EMPTY_PAYLOAD", (m = this.onError) == null || m.call(this, f);
+      return;
+    }
     this.flags = n, this.enableOfflineCache && Promise.resolve(
       this.cacheAdapter.saveFlags(this.apiKey, n)
     ), this.notifySubscribers();
@@ -20420,7 +20440,7 @@ class Ag {
       try {
         n(this.flags);
       } catch (o) {
-        qt.error("[FlagClient] Error in subscriber callback:", o);
+        Ft.error("[FlagClient] Error in subscriber callback:", o);
       }
     });
   }
@@ -20458,9 +20478,9 @@ class Ag {
       )), this.transport && typeof this.transport.fetchFlags == "function")
         try {
           const s = yield this.transport.fetchFlags(this.context);
-          qt.log("[FlagClient] Flags updated after context change:", s), this.updateFlags(s);
+          Ft.log("[FlagClient] Flags updated after context change:", s), this.updateFlags(s);
         } catch (s) {
-          qt.error("[FlagClient] Error updating flags after context change:", s), (o = this.onError) == null || o.call(this, s);
+          Ft.error("[FlagClient] Error updating flags after context change:", s), (o = this.onError) == null || o.call(this, s);
         }
     });
   }
@@ -20477,7 +20497,7 @@ class Ag {
    */
   ready(n = 3e3) {
     return Ie(this, null, function* () {
-      qt.log("[FlagClient] 🔍 ready() START"), this.deferInitialization && !this.isInitialized && this.initializationOptions && (qt.log("[FlagClient] 🔍 About to initialize..."), yield this.initialize(this.initializationOptions), qt.log("[FlagClient] 🔍 Initialize complete")), Object.keys(this.flags).length === 0 && (yield this.waitForFlags(n)), yield this.readyPromise;
+      Ft.log("[FlagClient] 🔍 ready() START"), this.deferInitialization && !this.isInitialized && this.initializationOptions && (Ft.log("[FlagClient] 🔍 About to initialize..."), yield this.initialize(this.initializationOptions), Ft.log("[FlagClient] 🔍 Initialize complete")), Object.keys(this.flags).length === 0 && (yield this.waitForFlags(n)), yield this.readyPromise;
     });
   }
   /**
@@ -20498,11 +20518,11 @@ class Ag {
         s || (s = !0, m && m(), o());
       }, n);
       m = this.subscribe((g) => {
-        !s && Object.keys(g).length > 0 ? (s = !0, clearTimeout(f), m && m(), o()) : qt.log("[FlagClient] 📥 Not resolving:", {
+        !s && Object.keys(g).length > 0 ? (s = !0, clearTimeout(f), m && m(), o()) : Ft.log("[FlagClient] 📥 Not resolving:", {
           resolved: s,
           flagsLength: Object.keys(g).length
         });
-      }), qt.log("[FlagClient] 🔍 Subscribe callback registered");
+      }), Ft.log("[FlagClient] 🔍 Subscribe callback registered");
     });
   }
 }

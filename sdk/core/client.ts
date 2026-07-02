@@ -228,6 +228,24 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    */
   private async setupTransport(options: FlagClientOptions<C>): Promise<void> {
     logger.log('[FlagClient] setupTransport() started');
+
+    // Task 1: Use injected transport if provided
+    if (options.transport) {
+      logger.log('[FlagClient] Using injected transport');
+      this.transport = options.transport;
+
+      if (typeof this.transport.onFlagsUpdated === 'function') {
+        this.transport.onFlagsUpdated((updatedFlags) => {
+          logger.log('[FlagClient] Flags updated via injected transport:', updatedFlags);
+          this.updateFlags(updatedFlags);
+        });
+      }
+
+      const initialData = await this.transport.fetchFlags(this.context);
+      this.updateFlags(initialData);
+      return;
+    }
+
     const mode = options.transportMode ?? 'auto';
 
     const useWebSocket = async (): Promise<Transport<C, T>> => {
@@ -275,16 +293,36 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
         this.updateFlags(updatedFlags);
       });
     }
-    const initialData = await this.transport.fetchFlags(this.context);
 
-    this.updateFlags(initialData);
+    // Task 3: Skip redundant fetchFlags() for long-polling since lp.init() already fetches
+    // For websocket and fallback cases, we still need the initial fetch
+    if (mode !== 'long-polling') {
+      const initialData = await this.transport.fetchFlags(this.context);
+      this.updateFlags(initialData);
+    }
   }
 
   /**
    * Updates flags and notifies all subscribers.
    * This is the centralized method for any flag update.
+   * 
+   * Task 2: Guard against empty payload overwrites.
+   * If newFlags is empty and this.flags is non-empty, skip the overwrite
+   * and surface via onError instead.
    */
   private updateFlags(newFlags: FeatureFlags<T>): void {
+    // Guard: if newFlags is empty and this.flags is non-empty, skip overwrite
+    const newFlagsEmpty = Object.keys(newFlags).length === 0;
+    const currentFlagsNonEmpty = Object.keys(this.flags).length > 0;
+
+    if (newFlagsEmpty && currentFlagsNonEmpty) {
+      logger.warn('[FlagClient] Received empty flags payload while cache is non-empty. Preserving cache.');
+      const error = new Error('Empty flags payload received but cache preserved');
+      (error as any).code = 'ERR_EMPTY_PAYLOAD';
+      this.onError?.(error);
+      return;
+    }
+
     this.flags = newFlags;
 
     // Cache the new flags

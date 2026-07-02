@@ -74,6 +74,10 @@ export declare class FlagClient<T = unknown, C extends Record<string, any> = Rec
     /**
      * Updates flags and notifies all subscribers.
      * This is the centralized method for any flag update.
+     *
+     * Task 2: Guard against empty payload overwrites.
+     * If newFlags is empty and this.flags is non-empty, skip the overwrite
+     * and surface via onError instead.
      */
     private updateFlags;
     /**
