@@ -1,13 +1,13 @@
 import { CacheAdapter, FeatureFlags } from '@/core/helpers/types';
 import type { Transport } from '@/core/transports/Transport';
 import { LongPollingTransport } from '@/core/transports/LongPollingTransport';
-import { WebSocketTransport } from '@/core/transports/WebsocketTransport';
 import { FlagValue } from '@/core/evaluation/types';
 import { evaluateFlagValue } from '@/core/evaluation/evaluateFlagValue';
 import * as syncCache from '@/core/helpers/cacheHelper';
 import { logger } from '@/core/helpers/logger';
+import { SseTransport } from './transports/SSETransport';
 
-type TransportMode = 'auto' | 'websocket' | 'long-polling';
+type TransportMode = 'auto' | 'long-polling' | 'sse';
 
 export interface FlagClientOptions<C extends Record<string, any> = Record<string, any>> {
   apiKey: string;
@@ -35,10 +35,15 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
   deferInitialization?: boolean;
   cacheAdapter?: CacheAdapter<C>;
   restEndpoint?: string;
-  wsEndpoint?: string;
+  sseEndpoint?: string;
   debugLog?: boolean; // this option should be true, if a user wants access to flagmint internal logs
   env?: string;
   enableFlagmint: boolean; // this is used to trigger connection to Flagmint service. This prevents connection when in dev and reduced billing.
+  wrapperInfo?: {
+    name: string;
+    version: string;
+  }
+  EventSourceImpl?: any
 }
 
 const DEFAULT_CACHE_TTL = 24 * 60 * 60 * 1000;
@@ -46,31 +51,34 @@ const DEFAULT_CACHE_TTL = 24 * 60 * 60 * 1000;
 /**
  * Get default endpoints based on NODE_ENV
  */
-function getDefaultEndpoints(env?: string): { rest: string; ws: string } {
+function getDefaultEndpoints(env?: string): { rest: string; handshakeURL: string, sse: string } {
   const environment =
     env || (typeof process !== 'undefined' ? (process.env.NEXT_PUBLIC_NODE_ENV || process.env.NODE_ENV) : 'production');
   switch (environment?.toLowerCase()) {
-    case 'production':
-      return {
-        rest: 'https://api.flagmint.com/evaluator/evaluate',
-        ws: 'wss://api.flagmint.com/ws/sdk',
-      };
     case 'staging':
       return {
+        sse: 'https://staging-api.flagmint.com/evaluator/v2/flags',
         rest: 'https://staging-api.flagmint.com/evaluator/evaluate',
-        ws: 'wss://staging-api.flagmint.com/ws/sdk',
+        handshakeURL: 'https://staging-api.flagmint.com/auth/asl-handshake'
       };
     case 'development':
+      return {
+        sse: 'http://localhost:3000/evaluator/v2/flags',
+        rest: 'https://localhost:3000/evaluator/evaluate',
+        handshakeURL: 'http://localhost:3000/auth/asl-handshake'
+      };
+    case 'production':
     default:
       return {
+        sse: 'https://staging-api.flagmint.com/evaluator/v2/flags',
         rest: 'https://api.flagmint.com/evaluator/evaluate',
-        ws: 'wss://api.flagmint.com/ws/sdk',
+        handshakeURL: 'https://api.flagmint.com/auth/asl-handshake'
       };
   }
 }
 
 const REST_ENDPOINT = getDefaultEndpoints().rest;
-const WS_ENDPOINT = getDefaultEndpoints().ws;
+const SSE_ENDPOINT = getDefaultEndpoints().sse
 
 // Type for subscription callbacks
 type FlagUpdateCallback<T> = (flags: FeatureFlags<T>) => void;
@@ -85,7 +93,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   private cacheTTL: number;
   private transport!: Transport<C, T>;
   private restEndpoint: string;
-  private wsEndpoint: string;
+  private aslHandshakeUrl: string;
+  private sseEndpoint: string;
 
   private readyPromise!: Promise<void>;
   private resolveReady!: () => void;
@@ -116,8 +125,9 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     this.persistContext = options.persistContext ?? false;
     this.cacheTTL = DEFAULT_CACHE_TTL;
     this.onError = options.onError;
-    this.restEndpoint = getDefaultEndpoints(options.env).rest ?? REST_ENDPOINT;
-    this.wsEndpoint = getDefaultEndpoints(options.env).ws ?? WS_ENDPOINT;
+    this.restEndpoint = options.restEndpoint ?? getDefaultEndpoints(options.env).rest ?? REST_ENDPOINT;
+    this.sseEndpoint = options.sseEndpoint ?? getDefaultEndpoints(options.env).sse ?? SSE_ENDPOINT;
+    this.aslHandshakeUrl = getDefaultEndpoints(options.env).handshakeURL ?? 'http://localhost:3000/auth/asl-handshake'; // Default to local dev server
     this.cacheAdapter = options.cacheAdapter ?? {
       loadFlags: syncCache.loadCachedFlags,
       saveFlags: syncCache.saveCachedFlags,
@@ -151,7 +161,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       this.rejectReady = reject;
     });
 
-    if(this.enableFlagmint) {
+    if (this.enableFlagmint) {
       if (this.deferInitialization) {
         logger.log('[FlagClient] Initialization deferred. Call ready() to initialize.');
         // Store options for later initialization
@@ -224,60 +234,101 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   }
 
   /**
-   * Sets up the transport layer for the client.
-   */
+ * Creates and initializes the transport layer used to receive feature flag
+ * updates from the Flagmint platform.
+ *
+ * This method performs the authentication handshake to obtain a fresh session
+ * identifier, selects the appropriate transport based on the configured
+ * transport mode, and initializes it before attaching the internal flag update
+ * listener.
+ *
+ * When operating in `auto` mode, the client attempts to establish a
+ * Server-Sent Events (SSE) connection first. If SSE initialization fails,
+ * it automatically falls back to the long-polling transport to maintain
+ * feature flag delivery.
+ *
+ * Once the transport is ready, any available initial flags are immediately
+ * synchronized into the client state before future updates are received
+ * through the transport's notification callbacks.
+ *
+ * @param {FlagClientOptions<C>} options - The client configuration used to
+ * authenticate the handshake request and determine which transport strategy
+ * to initialize.
+ *
+ * @returns {Promise<void>} A promise that resolves once the selected transport
+ * has been initialized and wired into the FlagClient.
+ *
+ * @throws {Error} If the authentication handshake fails, the session identifier
+ * cannot be obtained, or the configured transport fails to initialize.
+ */
   private async setupTransport(options: FlagClientOptions<C>): Promise<void> {
     logger.log('[FlagClient] setupTransport() started');
     const mode = options.transportMode ?? 'auto';
 
-    const useWebSocket = async (): Promise<Transport<C, T>> => {
-      logger.log('[FlagClient] Initializing WebSocket transport...');
-      const ws = new WebSocketTransport<C, T>(this.wsEndpoint, this.apiKey);
-      await ws.init();
-      logger.log('[FlagClient] WebSocket transport initialized');
-      return ws;
+    const sessionId = await this.fetchFreshSessionId(options.apiKey)
+    if (!sessionId) {
+      throw new Error('Handshake parsing error: Remote platform returned empty identity session token strings.');
+    }
+
+    // --- Transport Factory Instantiators (Clean, listener-free instantiation wrappers) ---
+
+    const useSSE = async (): Promise<Transport<C, T>> => {
+      logger.log('[FlagClient] Initializing Server-Sent Events (SSE) streaming transport...', this.context);
+      // Standardizes pass matching endpoint schemas explicitly using handshake credentials
+      const sse = new SseTransport<C, T>(
+        this.sseEndpoint,
+        sessionId,
+        this.context,
+        () => this.fetchFreshSessionId(options.apiKey),
+        {
+          wrapper: options.wrapperInfo,
+          EventSourceImpl: options.EventSourceImpl
+        }
+      );
+      await sse.init();
+      logger.log('[FlagClient] SSE streaming transport initialized successfully.');
+      return sse;
     };
 
     const useLongPolling = (): Transport<C, T> => {
-      const lp = new LongPollingTransport<C, T>(this.restEndpoint, this.apiKey, this.context, {
+      logger.log('[FlagClient] Initializing long-polling fallback loop transport...');
+      const lp = new LongPollingTransport<C, T>(this.restEndpoint, options.apiKey, this.context, {
         pollIntervalMs: 1200000,
-        maxBackoffMs: 60000,       // 1min max backoff
-        backoffMultiplier: 2       // Double each time
-      });
-
-      lp.onFlagsUpdated((flags) => {
-        logger.log('[FlagClient] Flags updated via long polling:', flags);
-        this.updateFlags(flags);
+        maxBackoffMs: 60000,
+        backoffMultiplier: 2
       });
       void lp.init();
-
       return lp;
     };
 
-    if (mode === 'websocket') {
-      this.transport = await useWebSocket();
+    if (mode === 'sse') {
+      this.transport = await useSSE();
     } else if (mode === 'long-polling') {
       this.transport = useLongPolling();
     } else {
+      // Auto Mode Execution Layout (SSE -> Long Polling Fallback Routing)
       try {
-        this.transport = await useWebSocket();
+        this.transport = await useSSE();
       } catch (e) {
-        const code = (e as any).code;
-        if (code === 'ERR_AUTH' || code === 'ERR_RATE_LIMITED') throw e; // both terminal — long polling hits the same wall
-        logger.warn('[FlagClient] WebSocket failed, falling back to long polling');
+        logger.warn('[FlagClient] Streaming transport failure. Deploying long-polling backup channels.', (e as Error).message);
         this.transport = useLongPolling();
       }
     }
 
+    // 2. FIXED: Standardized Callback Attachment Pattern
+    // Attaches exactly one single state listener block down the chosen execution line
     if (typeof this.transport.onFlagsUpdated === 'function') {
       this.transport.onFlagsUpdated((updatedFlags) => {
-        logger.log('[FlagClient] Flags updated via transport:', updatedFlags);
+        logger.log('[FlagClient] Flags updated via transport line stream notification:', updatedFlags);
         this.updateFlags(updatedFlags);
       });
     }
-    const initialData = await this.transport.fetchFlags(this.context);
 
+    // 3. FIXED: Deduplicated Performance Optimization 
+    // SseTransport.init() already populates this.flags natively. If present, load local variables instantly.
+    const initialData = (this.transport as any).flags ?? {};
     this.updateFlags(initialData);
+    logger.log('[FlagClient] Flag Client bootstrapping routines successfully finalized.');
   }
 
   /**
@@ -358,7 +409,6 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     if (this.transport && typeof this.transport.fetchFlags === 'function') {
       try {
         const updatedFlags = await this.transport.fetchFlags(this.context);
-        logger.log('[FlagClient] Flags updated after context change:', updatedFlags);
         this.updateFlags(updatedFlags);
       } catch (error) {
         logger.error('[FlagClient] Error updating flags after context change:', error);
@@ -382,24 +432,41 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   }
 
   /**
-   * Wait for the client to be ready.
-   * Resolves when: flags are available AND initialization succeeded.
-   * Rejects if: initialization/connection fails (even if cached flags exist).
-   */
+ * Waits until the FlagClient is fully initialized and ready for feature flag
+ * evaluation.
+ *
+ * If deferred initialization is enabled, this method will first perform the
+ * initial client setup. It then waits for the first feature flag payload to
+ * become available (or until the specified timeout expires) before awaiting
+ * completion of the underlying transport initialization.
+ *
+ * This method guarantees that transport or connection failures are surfaced,
+ * even when feature flags have already been restored from cache.
+ *
+ * @param {number} [timeoutMs=3000] - The maximum amount of time, in
+ * milliseconds, to wait for the initial feature flag payload before
+ * continuing initialization.
+ *
+ * @returns {Promise<void>} A promise that resolves when the client is fully
+ * initialized and ready to evaluate feature flags.
+ *
+ * @throws {Error} If client initialization or the underlying transport fails,
+ * such as authentication, rate limiting, or connection errors.
+ */
   async ready(timeoutMs: number = 3000): Promise<void> {
     logger.log('[FlagClient] 🔍 ready() START');
-    
+
     if (this.deferInitialization && !this.isInitialized && this.initializationOptions) {
       logger.log('[FlagClient] 🔍 About to initialize...');
       await this.initialize(this.initializationOptions);
       logger.log('[FlagClient] 🔍 Initialize complete');
     }
-    
+
     // Wait for flags to be available (cached or fetched)
     if (Object.keys(this.flags).length === 0) {
       await this.waitForFlags(timeoutMs);
     }
-    
+
     // Always wait for initialization to complete
     // This catches connection/transport errors even if cached flags exist
     await this.readyPromise;
@@ -419,6 +486,25 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     return result;
   }
 
+  /**
+ * Waits until the client receives its first non-empty feature flag payload,
+ * or until the specified timeout elapses.
+ *
+ * This method subscribes to flag updates and resolves as soon as at least one
+ * feature flag is available. If no flags are received within the allotted
+ * timeout, the promise still resolves, allowing the SDK to continue
+ * initialization using default or cached values instead of blocking
+ * indefinitely.
+ *
+ * The internal subscription is automatically removed when either condition
+ * is met to prevent memory leaks.
+ *
+ * @param {number} timeoutMs - The maximum amount of time, in milliseconds,
+ * to wait for the initial feature flag payload before resolving.
+ *
+ * @returns {Promise<void>} A promise that resolves when the first non-empty
+ * flag payload is received or when the timeout expires, whichever occurs first.
+ */
   private waitForFlags(timeoutMs: number): Promise<void> {
     return new Promise<void>((resolve) => {
       let resolved = false;
@@ -452,5 +538,56 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
       logger.log('[FlagClient] 🔍 Subscribe callback registered');
     });
+  }
+
+  /**
+   * Performs the initial authentication handshake with the Flagmint server
+   * to obtain a fresh, single-use session identifier.
+   *
+   * The returned session ID is used by streaming transports (SSE/WebSocket)
+   * to establish an authenticated real-time connection. Session identifiers
+   * are intentionally short-lived and should not be reused across new
+   * streaming connections.
+   *
+   * @param {string} apiKey - The Flagmint API key used to authenticate the
+   * handshake request.
+   *
+   * @returns {Promise<string>} A promise that resolves with a newly issued
+   * session identifier.
+   *
+   * @throws {Error} If the API credentials are invalid (`ERR_AUTH`).
+   * @throws {Error} If the client has exceeded its rate limit (`ERR_RATE_LIMITED`).
+   * @throws {Error} If the handshake endpoint returns an unexpected HTTP error.
+   * @throws {Error} If the handshake response does not contain a valid session ID.
+   */
+  private async fetchFreshSessionId(apiKey: string): Promise<string> {
+    try {
+      const authenticationHandShake = await fetch(this.aslHandshakeUrl, {
+        method: 'POST',
+        headers: { 'X-API-Key': apiKey },
+      });
+
+      if (authenticationHandShake.status === 401) {
+        throw new Error('ERR_AUTH: Invalid API credentials configuration.');
+      }
+      if (authenticationHandShake.status === 429) {
+        throw new Error('ERR_RATE_LIMITED: Client ingestion limits exceeded.');
+      }
+      if (!authenticationHandShake.ok) {
+        throw new Error(`Handshake server infrastructure exception (${authenticationHandShake.status})`);
+      }
+
+      const handshakeData = await authenticationHandShake.json();
+      const sessionId = handshakeData?.data?.sessionId;
+
+      if (!sessionId) {
+        throw new Error('Handshake parsing error: Remote platform returned empty session token.');
+      }
+
+      return sessionId;
+    } catch (err) {
+      logger.error('[FlagClient] Core Handshake failure encountered:', (err as Error).message);
+      throw err;
+    }
   }
 }

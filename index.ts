@@ -12,6 +12,7 @@ export type { CacheAdapter, FeatureFlags } from './sdk/core/helpers/types';
 export * as syncCache from './sdk/core/helpers/cacheHelper';           // sync: loadCachedFlags, saveCachedFlags, etc.
 export * as asyncCache from './sdk/core/helpers/cacheHelper.async';     // async: loadCachedFlags, saveCachedFlags, etc.
 
+
 // // Transports
 export type { Transport } from './sdk/core/transports/Transport';
 export { LongPollingTransport } from './sdk/core/transports/LongPollingTransport';

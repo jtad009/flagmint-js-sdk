@@ -82,7 +82,7 @@ export class WebSocketTransport<C, T> implements Transport<C, T> {
           this.setConnectionState('connecting');
           const WebSocketImpl = this.getWebSocketImplementation();
 
-          this.socket = new WebSocketImpl(`${this.wsUrl}?apiKey=${this.apiKey}`);
+          this.socket = new WebSocketImpl(`${this.wsUrl}?sessionId=${this.apiKey}`);
 
           this.socket.onopen = () => {
             logger.log('[WebSocketTransport] Connected');
