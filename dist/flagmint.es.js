@@ -38882,12 +38882,6 @@ const DEFAULT_CACHE_TTL = 24 * 60 * 60 * 1e3;
 function getDefaultEndpoints(env2) {
   const environment = env2 || (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_NODE_ENV || process.env.NODE_ENV : "production");
   switch (environment == null ? void 0 : environment.toLowerCase()) {
-    case "production":
-      return {
-        sse: "https://staging-api.flagmint.com/evaluator/v2/flags",
-        rest: "https://api.flagmint.com/evaluator/evaluate",
-        handshakeURL: "https://api.flagmint.com/auth/asl-handshake"
-      };
     case "staging":
       return {
         sse: "https://staging-api.flagmint.com/evaluator/v2/flags",
@@ -38895,11 +38889,17 @@ function getDefaultEndpoints(env2) {
         handshakeURL: "https://staging-api.flagmint.com/auth/asl-handshake"
       };
     case "development":
-    default:
       return {
         sse: "http://localhost:3000/evaluator/v2/flags",
         rest: "https://localhost:3000/evaluator/evaluate",
         handshakeURL: "http://localhost:3000/auth/asl-handshake"
+      };
+    case "production":
+    default:
+      return {
+        sse: "https://staging-api.flagmint.com/evaluator/v2/flags",
+        rest: "https://api.flagmint.com/evaluator/evaluate",
+        handshakeURL: "https://api.flagmint.com/auth/asl-handshake"
       };
   }
 }
@@ -38963,9 +38963,6 @@ class FlagClient {
       }
     } else {
       logger.log("[FlagClient] Flagmint connection disabled. Skipping initialization.");
-      this.isInitialized = true;
-      this.resolveReady();
-      this.notifySubscribers();
     }
   }
   /**
@@ -39008,10 +39005,6 @@ class FlagClient {
           logger.warn("[FlagClient] Transport connection failed. No cached flags — getFlag() will return fallback values.");
         }
         (_a = this.onError) == null ? void 0 : _a.call(this, error2);
-        if (this.transport) {
-          logger.log("[FlagClient] Destroying transport after initialization failure.");
-          this.transport.destroy();
-        }
         this.isInitialized = true;
         this.resolveReady();
       }
@@ -39171,7 +39164,6 @@ class FlagClient {
       if (this.transport && typeof this.transport.fetchFlags === "function") {
         try {
           const updatedFlags = yield this.transport.fetchFlags(this.context);
-          logger.log("[FlagClient] Flags updated after context change:", updatedFlags);
           this.updateFlags(updatedFlags);
         } catch (error2) {
           logger.error("[FlagClient] Error updating flags after context change:", error2);
@@ -39408,223 +39400,13 @@ const cacheHelper_async = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.d
   saveCachedFlags,
   setAsyncCacheStorage
 }, Symbol.toStringTag, { value: "Module" }));
-class WebSocketTransport {
-  constructor(wsUrl, apiKey, maxRetries = 5, initialBackoffMs = 1e3) {
-    this.wsUrl = wsUrl;
-    this.apiKey = apiKey;
-    this.maxRetries = maxRetries;
-    this.initialBackoffMs = initialBackoffMs;
-    this.socket = null;
-    this.flags = {};
-    this.context = null;
-    this.isReady = false;
-    this.initialFlagsReceived = false;
-    this.initialFlagsPromise = null;
-    this.initialFlagsResolve = null;
-    this.initialFlagsReject = null;
-    this.retries = 0;
-    this.reconnectTimeoutId = null;
-  }
-  init() {
-    return __async(this, null, function* () {
-      yield this.connectWithRetry();
-      yield this.waitForInitialFlags();
-    });
-  }
-  waitForInitialFlags() {
-    if (this.initialFlagsReceived) {
-      return Promise.resolve();
-    }
-    if (!this.initialFlagsPromise) {
-      this.initialFlagsPromise = new Promise((resolve, reject) => {
-        this.initialFlagsResolve = resolve;
-        this.initialFlagsReject = reject;
-      });
-    }
-    return this.initialFlagsPromise;
-  }
-  connectWithRetry() {
-    return new Promise((resolve, reject) => {
-      const connect = () => {
-        try {
-          this.cleanupSocket();
-          this.setConnectionState("connecting");
-          const WebSocketImpl = this.getWebSocketImplementation();
-          this.socket = new WebSocketImpl(`${this.wsUrl}?sessionId=${this.apiKey}`);
-          this.socket.onopen = () => {
-            logger.log("[WebSocketTransport] Connected");
-            this.isReady = true;
-            this.retries = 0;
-            this.setConnectionState("connected");
-            if (this.context) {
-              this.sendContext(this.context);
-            }
-            resolve();
-          };
-          this.socket.onmessage = (event) => {
-            var _a;
-            try {
-              const data = JSON.parse(event.data);
-              logger.log("[WebSocketTransport] Message received:", data);
-              if (data.type === "ping") {
-                if (this.socket && this.socket.readyState === 1) {
-                  this.socket.send(JSON.stringify({ type: "pong" }));
-                }
-                return;
-              }
-              if (data.type === "pong") {
-                logger.log("[WebSocketTransport] Pong received");
-                return;
-              }
-              if (data.type === "flags") {
-                logger.log("[WebSocketTransport] Flags update received");
-                this.flags = data.flags;
-                this.initialFlagsReceived = true;
-                (_a = this.onFlagsUpdatedCallback) == null ? void 0 : _a.call(this, this.flags);
-                if (this.initialFlagsResolve) {
-                  this.initialFlagsResolve();
-                  this.initialFlagsResolve = null;
-                }
-              }
-            } catch (err) {
-              logger.warn("[WebSocketTransport] Failed to parse message:", err);
-            }
-          };
-          this.socket.onerror = (err) => {
-            logger.error("[WebSocketTransport] Error:", err);
-          };
-          this.socket.onclose = (event) => {
-            var _a, _b, _c;
-            logger.log("[WebSocketTransport] Connection closed:", event.code);
-            this.isReady = false;
-            this.setConnectionState("disconnected");
-            if (event.code === 1008 || event.code === 4001) {
-              this.setConnectionState("failed");
-              const reason = (_a = event.reason) != null ? _a : "";
-              const isRateLimit = reason.toLowerCase().includes("rate limit") || reason.toLowerCase().includes("too many");
-              const err = isRateLimit ? Object.assign(new Error(reason || "Rate limit exceeded. Please try again later."), {
-                code: "ERR_RATE_LIMITED",
-                resetTime: (_c = (_b = reason.match(/after (.+)$/i)) == null ? void 0 : _b[1]) == null ? void 0 : _c.trim()
-              }) : Object.assign(new Error("Unauthorized: Invalid API key"), { code: "ERR_AUTH" });
-              if (this.initialFlagsReject) {
-                this.initialFlagsReject(err);
-                this.initialFlagsReject = null;
-                this.initialFlagsResolve = null;
-              }
-              reject(err);
-              return;
-            }
-            if (this.retries < this.maxRetries) {
-              const delay = this.initialBackoffMs * Math.pow(2, this.retries);
-              logger.warn(
-                `[WebSocketTransport] Reconnecting in ${delay}ms (attempt ${this.retries + 1})`
-              );
-              this.setConnectionState("reconnecting");
-              this.reconnectTimeoutId = setTimeout(connect, delay);
-              this.retries++;
-            } else {
-              this.setConnectionState("failed");
-              reject(new Error(`WebSocket failed after ${this.retries} retries`));
-            }
-          };
-        } catch (err) {
-          logger.error("[WebSocketTransport] Failed to create socket:", err);
-          this.setConnectionState("failed");
-          reject(err);
-        }
-      };
-      connect();
-    });
-  }
-  cleanupSocket() {
-    if (this.socket) {
-      this.socket.onopen = null;
-      this.socket.onmessage = null;
-      this.socket.onerror = null;
-      this.socket.onclose = null;
-      if (this.socket.readyState === 1) {
-        this.socket.close();
-      }
-      this.socket = null;
-    }
-  }
-  setConnectionState(state) {
-    var _a;
-    (_a = this.onConnectionStateCallback) == null ? void 0 : _a.call(this, state);
-  }
-  getWebSocketImplementation() {
-    if (typeof WebSocket !== "undefined") {
-      return WebSocket;
-    }
-    try {
-      const ws = typeof require !== "undefined" ? require("ws") : null;
-      if (ws)
-        return ws.default || ws;
-      throw new Error("ws package not available");
-    } catch (err) {
-      throw new Error(
-        'WebSocket not available. Install "ws" package for Node.js: npm install ws'
-      );
-    }
-  }
-  fetchFlags(context) {
-    return __async(this, null, function* () {
-      var _a;
-      this.context = ensureContextSource(context);
-      if (this.isReady && ((_a = this.socket) == null ? void 0 : _a.readyState) === 1) {
-        this.sendContext(this.context);
-        if (!this.initialFlagsReceived) {
-          yield this.waitForInitialFlags();
-        } else {
-          yield new Promise((resolve) => setTimeout(resolve, 200));
-        }
-      }
-      return this.flags;
-    });
-  }
-  onFlagsUpdated(callback) {
-    this.onFlagsUpdatedCallback = callback;
-  }
-  onConnectionStateChanged(callback) {
-    this.onConnectionStateCallback = callback;
-  }
-  destroy() {
-    logger.log("[WebSocketTransport] Destroying...");
-    if (this.reconnectTimeoutId !== null) {
-      clearTimeout(this.reconnectTimeoutId);
-      this.reconnectTimeoutId = null;
-    }
-    this.cleanupSocket();
-    this.flags = {};
-    this.context = null;
-    this.isReady = false;
-    this.initialFlagsReceived = false;
-    this.initialFlagsPromise = null;
-    this.initialFlagsResolve = null;
-    this.initialFlagsReject = null;
-    this.onFlagsUpdatedCallback = void 0;
-    this.onConnectionStateCallback = void 0;
-    this.retries = 0;
-  }
-  sendContext(context) {
-    if (!this.socket || this.socket.readyState !== 1) {
-      logger.warn("[WebSocketTransport] Socket not ready, cannot send context");
-      return;
-    }
-    const payload = JSON.stringify({
-      type: "context",
-      context: ensureContextSource(context)
-    });
-    this.socket.send(payload);
-  }
-}
 if (typeof globalThis.Buffer === "undefined") {
   globalThis.Buffer = buffer$1.Buffer;
 }
 export {
   FlagClient,
   LongPollingTransport,
-  WebSocketTransport,
+  SseTransport,
   cacheHelper_async as asyncCache,
   evaluateFlagValue,
   evaluateRollout,

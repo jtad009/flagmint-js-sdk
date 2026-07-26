@@ -16,7 +16,7 @@ export * as asyncCache from './sdk/core/helpers/cacheHelper.async';     // async
 // // Transports
 export type { Transport } from './sdk/core/transports/Transport';
 export { LongPollingTransport } from './sdk/core/transports/LongPollingTransport';
-export { WebSocketTransport }   from './sdk/core/transports/WebsocketTransport';
+export { SseTransport }   from './sdk/core/transports/SSETransport';
 
 // // Evaluation
 export type { FlagValue, EvaluationContext, Segment, Rollout, VariantRollout, VariantOption } from './sdk/core/evaluation/types';
