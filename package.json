@@ -1,6 +1,6 @@
 {
   "name": "flagmint-js-sdk",
-  "version": "1.2.25",
+  "version": "1.2.26",
   "description": "Framework-agnostic JavaScript SDK for managing feature flags in Flagmint applications.",
   "author": "Flagmint Team",
   "license": "BSD 3-Clause",
