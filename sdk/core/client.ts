@@ -275,9 +275,6 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
         this.updateFlags(updatedFlags);
       });
     }
-    const initialData = await this.transport.fetchFlags(this.context);
-
-    this.updateFlags(initialData);
   }
 
   /**
