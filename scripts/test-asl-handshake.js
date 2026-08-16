@@ -13,7 +13,6 @@ async function performHandshake(apiKey) {
   });
 
   const data = await res.json();
-  console.log('Handshake response:', data, apiKey);
   if (res.ok) {
     console.log('\x1b[32m%s\x1b[0m', '✔ Handshake Successful!');
     console.log('Session ID:', data.data.sessionId);

@@ -8,46 +8,28 @@
 
 ## Features
 
-- 🚀 Framework agnostic (React, Vue, Angular, Vanilla JS, Node.js)
-- 📡 Real-time flag updates using Server-Sent Events (SSE)
-- 🔄 Automatic reconnection with exponential backoff
-- 💾 Built-in synchronous and asynchronous cache adapters
-- 🌍 Works in both browsers and Node.js
-- 🔒 Fully typed with TypeScript
-- ⚡ Local flag evaluation (no network requests during `getFlag()`)
+- Framework agnostic (React, Vue, Angular, vanilla JS, Node.js)
+- Real-time flag updates over Server-Sent Events (SSE)
+- Automatic reconnection with a fresh single-use session token
+- Same-origin iframe/tab connection sharing (one stream per API key)
+- Built-in localStorage cache, with pluggable adapters for Node
+- `getFlag()` is always local — no network on the read path
 
-## 📋 Release Notes
+## Release notes
 
-## v2.0.0 (Breaking Architectural Upgrade)
+### v2.0.0
 
-- Protocol Shift from WebSockets to SSE — Replaced full-duplex WebSockets with unidirectional, lightweight Server-Sent Events (SSE) [INDEX], drastically reducing server-side thread allocation and memory overhead.
--  Isomorphic Thread-Safety — Automatic runtime context switching. Operating in the browser uses standard client stream identifiers [INDEX]. Operating in a Node.js server bypasses process locks to support thousands of parallel API controller evaluations concurrently.
--  Node.js Polyfill Injection — Introduced EventSourceImpl configuration option [INDEX]. Since Node.js lacks a native EventSource API [INDEX], backend servers can pass third-party modules (like the eventsource npm library) [INDEX].
+- **SSE instead of WebSockets.** Handshake at `POST /auth/asl-handshake`, stream at `GET /evaluator/v2/flags/stream`, context at `POST /evaluator/v2/flags/context`.
+- **Context updates match the API.** The SDK sends `x-api-key`, treats `202` as queued, and waits for the next `flags` event on the open stream (400ms server debounce). Browser and Node use the same path.
+- **Quota and stream errors.** Listens for `quota_exceeded` and named `error` events. Quota surfaces as `ERR_RATE_LIMITED` (`retryAfter`, `resetTime`) through `onError`. Cached flags keep serving.
+- **Connection sharing.** Same-origin documents (tabs, sibling iframes) with the same API key elect one leader that holds EventSource. Followers skip handshake and the stream. Off in Node so cluster workers each keep their own connection.
+- **Node `EventSourceImpl`.** Node has no native EventSource; pass one (for example `eventsource`).
+- **Session refresh on reconnect.** The stream consumes a single-use `sessionId`; reconnect fetches a new one before opening EventSource again.
+- **`ready()` never throws.** Failures go to `onError`. Cached flags, if any, are used in degraded mode.
 
-- 🔁 Automatic Token Rotation — Implemented an exponential backoff client-side reconnection loop [INDEX]. It refreshes single-use sessionId tokens before retrying [INDEX], surviving server hot-reloads and rolling production pod deployments without authorization errors.
--  Restored WebSocket Timing Semantics — Modified initialization promises so client.ready() unblocks the framework lifecycle immediately upon a successful HTTP connection handshake, ensuring total drop-in compatibility with legacy Vue and React wrapper SDK configurations.
-### v1.2.25
-- 🔇 **Controllable debug logging** — SDK logs are now silent by default; opt in with `logger.setup({ debugLog: true })`. In production, only connection/disconnection messages are ever emitted regardless of the setting.
-- 🔌 **Configurable endpoints** — `restEndpoint` and `wsEndpoint` can now be passed directly in `FlagClientOptions`, overriding the environment-derived defaults. Useful for proxies, staging overrides, or self-hosted deployments.
-- 📡 **`subscribe()` delivers current flags immediately** — the callback is now called synchronously with the current flag state at subscription time, so you never miss the initial value.
-- 🧹 **`destroy()` clears all subscribers** — calling `destroy()` now also clears the subscriber set, preventing stale callbacks from holding references after teardown.
-- 🛡️ **WebSocket auth vs rate-limit error discrimination** — close code `1008`/`4001` now inspects the close reason to distinguish `ERR_AUTH` (invalid API key) from `ERR_RATE_LIMITED` errors. Rate-limit errors include a `resetTime` field parsed from the close reason.
-- 🔗 **`initialFlagsReject` on WebSocket transport** — a post-`onopen` close with a terminal code now correctly rejects the `waitForInitialFlags()` promise (and therefore `init()`), so the error surfaces reliably through `client.ready()` even when the connection opened before the server sent the close frame.
-- 🔔 **`onConnectionStateChanged()` exposed** — consumers can now register a callback to observe WebSocket connection state transitions (`connecting`, `connected`, `disconnected`, `reconnecting`, `failed`).
+### v1.2.25 / v1.2.24
 
-### v1.2.24
-- ✨ Add `env` parameter to SDK configuration for explicit environment specification
-- Allows users to pass environment as a variable when NODE_ENV or NEXT_PUBLIC_NODE_ENV cannot be reliably detected
-- Improved environment resolution with fallback to auto-detection
-
-## ✨ Key Features
-
-- 🎯 **Framework-Agnostic**: Works with React, Vue, vanilla JS, Node.js, and more
-- 🔄 **Flexible Transport**: WebSocket for real-time updates or long-polling fallback
-- 💾 **Pluggable Caching**: Use built-in sync cache, async cache (Redis/filesystem), or custom implementations
-- 🚀 **Server & Browser Support**: Compatible with browser environments, Node.js, React Native
-- 🔒 **Type-Safe**: Full TypeScript support with comprehensive type definitions
-- ⚡ **Zero-Config Defaults**: Works out of the box with sensible defaults
+Historical WebSocket-era releases. See git tags for the full notes. v2.0.0 replaces that transport.
 
 ---
 
@@ -57,15 +39,13 @@
 npm install flagmint-js-sdk
 ```
 
-or
-
 ```bash
 yarn add flagmint-js-sdk
 ```
 
 ---
 
-# Quick Start
+# Quick start
 
 ## Browser
 
@@ -74,6 +54,7 @@ import { FlagClient } from 'flagmint-js-sdk';
 
 const client = new FlagClient({
   apiKey: 'ff_your_api_key',
+  enableFlagmint: true,
   context: {
     kind: 'user',
     user: {
@@ -81,37 +62,39 @@ const client = new FlagClient({
       key: 'user-123',
       email: 'user@example.com'
     }
+  },
+  onError: (error) => {
+    console.error(error.message, (error as { code?: string }).code);
   }
 });
 
 await client.ready();
 
 const enabled = client.getFlag('new_dashboard', false);
-
-console.log(enabled);
 ```
 
----
+Same-origin iframes that use this API key share one SSE connection by default. Set `shareConnection: false` if two clients on the page must keep different evaluation contexts at the same time, or if the origin hosts untrusted documents that should not share that stream.
 
 ## Node.js
 
-For SSE Transport option, Node.js does not currently provide a native `EventSource` implementation.
-
-Install the EventSource polyfill:
+Node does not provide `EventSource`. Install a polyfill and inject it. Each cluster worker should construct its own `FlagClient` (sharing is disabled without `window`).
 
 ```bash
 npm install eventsource
 ```
-
-Then inject it when creating the client.
 
 ```ts
 import { FlagClient } from 'flagmint-js-sdk';
 import EventSource from 'eventsource';
 
 const client = new FlagClient({
-    apiKey: process.env.FLAGMINT_API_KEY,
-    EventSourceImpl: EventSource
+  apiKey: process.env.FLAGMINT_API_KEY,
+  enableFlagmint: true,
+  EventSourceImpl: EventSource,
+  env: process.env.FLAGMINT_ENVIRONMENT || 'production',
+  onError: (error) => {
+    console.error('Flagmint error:', error);
+  }
 });
 
 await client.ready();
@@ -119,211 +102,184 @@ await client.ready();
 
 ---
 
-# How it Works
+# How it works
 
-After calling `ready()` the SDK:
+After `ready()`:
 
-1. Connects to the Flagmint streaming endpoint.
-2. Downloads the current feature flags.
-3. Stores them in the configured cache.
-4. Evaluates flags locally.
-5. Receives live updates over SSE.
-6. Notifies subscribers whenever flags change.
+1. Optionally joins a same-origin share group (browser). Followers stop here and receive flags from the leader.
+2. `POST /auth/asl-handshake` with `X-API-Key` → single-use `sessionId`.
+3. Opens `GET /evaluator/v2/flags/stream?sessionId&context&sdkVersion&platform&wrapper*`.
+4. Server sends `connected` (connection id) then `flags` (evaluated map). Heartbeats are SSE comments (`: heartbeat`) and are not exposed by EventSource.
+5. Flags are stored in the cache adapter (localStorage in the browser by default).
+6. Later admin publishes are pushed as `flags` events on the same stream.
 
-`getFlag()` never performs a network request.
+`getFlag()` / `getFlags()` never hit the network. They read the last evaluated snapshot.
+
+`updateContext()` `POST`s `/evaluator/v2/flags/context` with `x-api-key` and `{ connectionId, context }`. The HTTP response is `202`; new values arrive as a `flags` event after the server’s 400ms debounce.
 
 ---
 
 # Configuration
 
-| Option | Type | Description |
-|---------|------|-------------|
-| apiKey | string | Your environment API key |
-| context | object | Initial evaluation context |
-| transportMode | `'auto' \| 'sse' \| 'long-polling'` | Transport strategy |
-| EventSourceImpl | EventSource | Required in Node.js |
-| enableOfflineCache | boolean | Enable local cache |
-| persistContext | boolean | Persist context |
-| cacheAdapter | CacheAdapter | Custom cache implementation |
-| restEndpoint | string | Override REST endpoint |
-| sseEndpoint | string | Override SSE endpoint |
-| previewMode | boolean | Local evaluation only |
-| rawFlags | object | Local flag definitions |
-| onError | function | Error callback |
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `apiKey` | string | required | Environment API key |
+| `enableFlagmint` | boolean | `true` | Set `false` in local/dev to skip connecting (no handshake, no stream) |
+| `context` | object | `{}` | Initial evaluation context |
+| `transportMode` | `'auto' \| 'sse' \| 'long-polling'` | `'auto'` | `auto` tries SSE, then long-polling |
+| `EventSourceImpl` | EventSource | browser global | Required in Node |
+| `shareConnection` | boolean | `true` in browsers with `BroadcastChannel`, `false` in Node | One stream per API key across same-origin documents |
+| `enableOfflineCache` | boolean | `true` | Load/save flags via the cache adapter |
+| `persistContext` | boolean | `false` | Persist context in the cache adapter |
+| `cacheAdapter` | CacheAdapter | localStorage helpers | Custom cache (Redis, files, …) |
+| `restEndpoint` | string | env default | Override the long-polling / evaluate URL |
+| `sseEndpoint` | string | env default | Override the SSE base URL (`/stream` and `/context`) |
+| `handshakeEndpoint` | string | env default | Override the ASL handshake URL. Use with `sseEndpoint` for self-hosted gateways |
+| `env` | string | `NODE_ENV` | `development` \| `staging` \| `production` |
+| `wrapperInfo` | `{ name, version }` | native-js | Framework wrapper telemetry on the stream URL |
+| `previewMode` / `rawFlags` | | | Local-only evaluation, no network |
+| `deferInitialization` | boolean | `false` | Wait for `ready()` before connecting |
+| `debugLog` | boolean | `false` | Verbose SDK logs |
+| `onError` | `(error) => void` | | Auth, quota, transport, and context errors. `ready()` still resolves. |
 
 ---
 
-# Transport Modes
-
-## Auto (default)
-
-Attempts to establish an SSE connection and automatically falls back to long-polling if required.
+# Transport modes
 
 ```ts
-transportMode: 'auto'
-```
-
-## Server-Sent Events
-
-Persistent HTTP stream providing real-time flag updates.
-
-```ts
-transportMode: 'sse'
-```
-
-## Long Polling
-
-Useful where streaming connections are unavailable.
-
-```ts
-transportMode: 'long-polling'
+transportMode: 'auto'           // SSE, then long-polling
+transportMode: 'sse'            // stream only (throws into onError / fallback cache if it fails)
+transportMode: 'long-polling'   // POST evaluate on an interval
 ```
 
 ---
 
-# Working with Flags
+# Connection sharing
+
+Used when the same app is embedded twice on one origin (for example two WeSeeDo iframes in a host page).
+
+- **Leader** performs handshake and holds EventSource.
+- **Followers** receive flag snapshots over `BroadcastChannel` (`flagmint-share:<apiKey>`). Leadership is a `localStorage` lock (`flagmint_share_lock:<apiKey>`).
+- Follower `updateContext()` is forwarded to the leader, which runs it on the shared stream. Last write wins. Any same-origin document can send that RPC and see the flags that come back — turn sharing off if you host untrusted content on this origin.
+- If the leader iframe unloads, it posts `bye` so another member can take over immediately. If the tab is killed without `pagehide`, followers wait for the lock TTL.
 
 ```ts
-await client.ready();
+// Default in the browser — one stream for this API key
+shareConnection: true
 
-const enabled = client.getFlag('new_feature', false);
-
-const allFlags = client.getFlags();
+// Two clients, two contexts, two streams
+shareConnection: false
 ```
+
+Node cluster workers do not share. Each worker process opens its own stream.
 
 ---
 
-# Updating Context
+# Updating context
 
 ```ts
 await client.updateContext({
-    kind: 'multi',
-    user: {
-        kind: 'user',
-        key: '123'
-    },
-    organization: {
-        kind: 'organization',
-        key: 'acme'
-    }
+  kind: 'multi',
+  user: { kind: 'user', key: '123' },
+  organization: { kind: 'organization', key: 'acme' }
 });
 ```
 
-Updating the context automatically re-evaluates feature flags.
+Await this call. The promise settles when the stream delivers the next `flags` packet (or times out and keeps the previous snapshot). Overlapping calls are serialized.
+
+SSE `/context` changes **that connection’s** context. It is the right tool for a browser user logging in. It is the wrong tool for many concurrent Node HTTP requests with different targeting on one singleton client — wait for client-side rule evaluation, or use a dedicated client per distinct context.
 
 ---
 
-# Subscribing to Updates
+# Errors and quota
+
+`ready()` always resolves. Use `onError`:
+
+| `error.code` | Meaning |
+|---|---|
+| `ERR_AUTH` | Invalid API key, missing session, inactive subscription |
+| `ERR_RATE_LIMITED` | Evaluation quota exceeded. Check `retryAfter` (seconds) and `resetTime`. Free-tier payloads may include a last snapshot in `data`; the SDK applies it and keeps serving cache. |
+| `ERR_INVALID_CONTEXT` | Stream rejected the context payload |
+| `ERR_INTERNAL` | Named SSE `error` from the server |
 
 ```ts
-const unsubscribe = client.subscribe(() => {
-
-    const theme = client.getFlag('theme', 'light');
-
-    console.log(theme);
-
-});
-
-// Later
-
-unsubscribe();
-```
-
-The callback is invoked immediately after subscribing and again whenever flags change.
-
----
-
-# Offline Mode
-
-If offline caching is enabled (default):
-
-- cached flags are loaded automatically
-- `ready()` still resolves when cached flags exist
-- `onError()` is invoked when operating in degraded mode
-- `ready()` only rejects if no cache exists
-
----
-
-# Debug Logging
-
-Enable verbose SDK logging during development.
-
-```ts
-import { logger } from 'flagmint-js-sdk';
-
-logger.setup({
-    debugLog: true
-});
-```
-
-Production builds only emit connection lifecycle messages.
-
----
-
-# Cache Adapters
-
-## Built-in synchronous cache
-
-Suitable for browsers using localStorage.
-
-## Built-in asynchronous cache
-
-Suitable for:
-
-- Redis
-- File storage
-- React Native
-- Custom persistence
-
-You may also provide your own implementation.
-
-```ts
-cacheAdapter: {
-
-    loadFlags(){},
-
-    saveFlags(){},
-
-    loadContext(){},
-
-    saveContext(){}
-
+onError: (error) => {
+  const { code, retryAfter, resetTime, message } = error as {
+    code?: string;
+    retryAfter?: number;
+    resetTime?: string;
+    message: string;
+  };
+  console.error(code, message, retryAfter, resetTime);
 }
 ```
 
 ---
 
-# API
-
-## FlagClient
+# Subscribing
 
 ```ts
-await ready()
+const unsubscribe = client.subscribe((flags) => {
+  const theme = client.getFlag('theme', 'light');
+  console.log(theme, flags);
+});
 
-getFlag()
+unsubscribe();
+```
 
-getFlags()
+The callback runs immediately with the current snapshot, then on every push. `destroy()` clears subscribers.
 
-updateContext()
+---
 
-subscribe()
+# Offline cache
 
-destroy()
+Enabled by default. On boot the SDK loads `flagmint_<apiKey>_flags` from localStorage (24h TTL). If the stream fails, those values stay in memory and `onError` fires.
+
+```ts
+cacheAdapter: {
+  loadFlags(apiKey, ttl) { /* ... */ },
+  saveFlags(apiKey, data) { /* ... */ },
+  loadContext(apiKey) { /* ... */ },
+  saveContext(apiKey, ctx) { /* ... */ }
+}
+```
+
+Use `syncCache` in the browser and `asyncCache` (or your own) in Node / React Native.
+
+---
+
+# Debug logging
+
+```ts
+const client = new FlagClient({
+  apiKey: 'ff_your_api_key',
+  enableFlagmint: true,
+  debugLog: true
+});
+```
+
+In production, only connection lifecycle messages are emitted.
+
+---
+
+# API
+
+```ts
+await client.ready()
+client.getFlag(key, fallback)
+client.getFlags()
+await client.updateContext(context)
+client.subscribe(callback) // returns unsubscribe
+client.destroy()
 ```
 
 ---
 
-# Framework Support
+# Framework support
 
-- ✅ React
-- ✅ Vue
-- ✅ Angular
-- ✅ Next.js
-- ✅ Nuxt
-- ✅ Express
-- ✅ Fastify
-- ✅ Node.js
-- ✅ Vanilla JavaScript
+React, Vue, Angular, Next.js, Nuxt, Express, Fastify, Node.js, vanilla JavaScript.
+
+Wrappers (`flagmint-vuejs-feature-flags`, `flagmint-react-sdk`) construct `FlagClient` for you. Connection sharing lives in this core SDK, not in the wrappers.
 
 ---
 
@@ -332,11 +288,10 @@ destroy()
 BSD 3-Clause License © Flagmint Team
 
 ---
-# 📞 Support & Resources
 
 - **Documentation**: See [Flagmint Docs](https://docs.flagmint.com/sdks/nodejs)
-- **Issues**: Report on [GitHub](https://github.com/flagmint/js-sdk/issues)
-- **Email**: support@flagmint.io
+<!-- - **Issues**: Report on [GitHub](https://github.com/flagmint/js-sdk/issues) -->
+- **Email**: support@flagmint.com
 
 **Maintained with ❤️ by the Flagmint Team**
 

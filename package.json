@@ -25,7 +25,7 @@
     "test": "jest --runInBand --detectOpenHandles",
     "simulate:unreachable": "npm run build && node ./scripts/simulate-unreachable-server.js",
     "simulate:cache-fallback": "npm run build && node ./scripts/simulate-cache-adapter-fallback.js",
-    "simulate:asl-gen": "npm run build && node ./scripts/test-asl-handshake.js"
+    "simulate:asl-gen": "npm run build && node ./scripts/test-asl-handshake.mjs"
   },
   "peerDependencies": {
     "crypto": "*"

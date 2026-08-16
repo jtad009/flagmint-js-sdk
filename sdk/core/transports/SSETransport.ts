@@ -44,12 +44,25 @@ function createSdkError(
   return err;
 }
 
+function isPlainObject(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 function parseEventData(event: MessageEvent): Record<string, any> {
   try {
-    return JSON.parse(event.data) as Record<string, any>;
+    const parsed = JSON.parse(event.data);
+    return isPlainObject(parsed) ? parsed : {};
   } catch {
     return {};
   }
+}
+
+function isQuotaEvent(payload: Record<string, any>): boolean {
+  return (
+    payload.statusCode === 429 ||
+    payload.error === 'QUOTA_EXCEEDED' ||
+    typeof payload.retryAfter === 'number'
+  );
 }
 
 /**
@@ -114,7 +127,6 @@ export class SseTransport<C, T> implements Transport<C, T> {
     });
 
     await this.connect().catch((err) => {
-      this.initialFlagsReject?.(err);
       this.resetInitialResolvers();
       throw err;
     });
@@ -128,6 +140,11 @@ export class SseTransport<C, T> implements Transport<C, T> {
 
     try {
       await Promise.race([initializationPromise, timeoutPromise]);
+    } catch (err) {
+      this.terminalClose = true;
+      this.cleanupEventSource();
+      this.resetInitialResolvers();
+      throw err;
     } finally {
       clearTimeout(timeoutId!);
     }
@@ -138,8 +155,8 @@ export class SseTransport<C, T> implements Transport<C, T> {
    * `flags` event on the open SSE stream (after a 400ms debounce). The HTTP
    * body does not contain evaluated flags — browser and Node share this path.
    */
-  async fetchFlags(context: C): Promise<Record<string, T>> {
-    this.context = ensureContextSource(context);
+  async fetchFlags(context: C, options?: { persist?: boolean }): Promise<Record<string, T>> {
+    const pendingContext = ensureContextSource(context);
 
     const previous = this.contextUpdateQueue;
     let release!: () => void;
@@ -149,7 +166,10 @@ export class SseTransport<C, T> implements Transport<C, T> {
 
     try {
       await previous;
-      return await this.performContextUpdate();
+      if (options?.persist !== false) {
+        this.context = pendingContext;
+      }
+      return await this.performContextUpdate(pendingContext);
     } finally {
       release();
     }
@@ -210,7 +230,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
     this.onErrorCallback?.(err);
   }
 
-  private async performContextUpdate(): Promise<Record<string, T>> {
+  private async performContextUpdate(context: C): Promise<Record<string, T>> {
     if (!this.connectionId) {
       throw new Error('SSE configuration update blocked: stream connection not active.');
     }
@@ -231,16 +251,20 @@ export class SseTransport<C, T> implements Transport<C, T> {
       }, CONTEXT_UPDATE_TIMEOUT_MS);
     });
 
+    const abortController = new AbortController();
+    const abortId = setTimeout(() => abortController.abort(), CONTEXT_UPDATE_TIMEOUT_MS);
+
     try {
       const response = await fetch(`${this.endpoint}/context`, {
         method: 'POST',
+        signal: abortController.signal,
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': this.apiKey,
         },
         body: JSON.stringify({
           connectionId: this.connectionId,
-          context: this.context,
+          context,
         }),
       });
 
@@ -274,6 +298,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
       await nextFlagsPromise;
     } finally {
       clearTimeout(timeoutId!);
+      clearTimeout(abortId);
       if (this.nextFlagsResolve) {
         this.nextFlagsResolve = null;
       }
@@ -441,7 +466,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
 
           logger.error('[SseTransport] Native network pipeline alert layer triggered.');
 
-          if (this.connectPromise && !this.initialFlagsReceived) {
+          if (this.connectReject && !this.initialFlagsReceived) {
             const err = new Error('Initial SSE connection stream setup rejected by infrastructure gateway.');
             this.cleanupEventSource();
             reject(err);
@@ -487,6 +512,9 @@ export class SseTransport<C, T> implements Transport<C, T> {
     return (event: MessageEvent) => {
       try {
         const payload = parseEventData(event);
+        if (typeof payload.connectionId !== 'string' || !payload.connectionId) {
+          throw new Error('SSE `connected` event did not carry a connectionId.');
+        }
         this.connectionId = payload.connectionId;
         logger.log(`[SseTransport] Stream channel synchronized with remote identifier: ${this.connectionId}`);
 
@@ -511,7 +539,11 @@ export class SseTransport<C, T> implements Transport<C, T> {
     return (event: MessageEvent) => {
       try {
         const payload = parseEventData(event);
-        this.applyFlags((payload.flags ?? {}) as Record<string, T>);
+        if (!isPlainObject(payload.flags)) {
+          logger.warn('[SseTransport] Ignoring flags event without a flags object.');
+          return;
+        }
+        this.applyFlags(payload.flags as Record<string, T>);
       } catch (err) {
         logger.warn('[SseTransport] Failed structural parsing on streaming data packet:', err);
       }
@@ -521,6 +553,10 @@ export class SseTransport<C, T> implements Transport<C, T> {
   private createQuotaListener() {
     return (event: MessageEvent) => {
       const payload = parseEventData(event);
+      if (!isQuotaEvent(payload)) {
+        logger.warn('[SseTransport] Ignoring quota event without a quota payload.');
+        return;
+      }
       this.handleQuotaPayload(payload);
     };
   }
@@ -533,10 +569,14 @@ export class SseTransport<C, T> implements Transport<C, T> {
     return (event: MessageEvent) => {
       // Named SSE `event: error` from FF-EU is a MessageEvent with JSON data.
       // EventSource also fires a generic `error` Event on connection drop — ignore those here.
-      if (typeof event.data !== 'string') return;
+      if (typeof event.data !== 'string' || !event.data) return;
 
       const payload = parseEventData(event);
-      const errorCode = typeof payload.error === 'string' ? payload.error : 'internal_error';
+      if (typeof payload.error !== 'string' || !payload.error) {
+        logger.warn('[SseTransport] Ignoring named error event without an error code.');
+        return;
+      }
+      const errorCode = payload.error;
       const err = createSdkError(`SSE stream error: ${errorCode}`, this.mapStreamErrorCode(errorCode));
 
       const retryable = errorCode === 'session_id_missing' || errorCode === 'internal_error';

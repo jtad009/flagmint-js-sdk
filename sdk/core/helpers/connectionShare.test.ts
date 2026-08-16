@@ -57,6 +57,7 @@ function shareOptions(storage = memoryStorage(), now = { t: 1_000 }) {
       const index = timers.findIndex((timer) => timer.id === (id as unknown as number));
       if (index >= 0) timers.splice(index, 1);
     },
+    delay: async () => undefined,
     tickTimers: () => {
       [...timers].forEach((timer) => timer.handler());
     },
@@ -103,6 +104,31 @@ describe('ConnectionShareHub', () => {
     follower.destroy();
   });
 
+  it('ignores a malformed flags broadcast instead of wiping the follower snapshot', async () => {
+    const options = shareOptions();
+    const leader = new ConnectionShareHub('ff_test', options);
+    const follower = new ConnectionShareHub('ff_test', options);
+
+    await leader.join();
+    await follower.join();
+    leader.broadcastFlags({ featureA: true });
+
+    const transport = follower.createFollowerTransport();
+    const received: Array<Record<string, unknown>> = [];
+    transport.onFlagsUpdated?.((flags) => received.push(flags));
+    await transport.init();
+
+    const rogue = new MemoryChannel('flagmint-share:ff_test');
+    rogue.postMessage({ type: 'flags', memberId: 'rogue' });
+    rogue.postMessage({ type: 'flags', memberId: 'rogue', flags: ['not', 'an', 'object'] });
+    rogue.close();
+
+    expect(received).toEqual([{ featureA: true }]);
+
+    leader.destroy();
+    follower.destroy();
+  });
+
   it('forwards follower context updates through the leader', async () => {
     const options = shareOptions();
     const leader = new ConnectionShareHub('ff_test', options);
@@ -131,15 +157,45 @@ describe('ConnectionShareHub', () => {
     const promoted = jest.fn();
 
     await leader.join();
-    await follower.join();
     follower.onPromote(promoted);
+    await follower.join();
 
     leader.destroy();
-    options.tickTimers();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
 
     expect(promoted).toHaveBeenCalledTimes(1);
     expect(follower.currentRole).toBe('leader');
 
     follower.destroy();
+  });
+
+  it('promotes only one follower when the leader leaves', async () => {
+    const options = shareOptions();
+    const leader = new ConnectionShareHub('ff_test', options);
+    const first = new ConnectionShareHub('ff_test', options);
+    const second = new ConnectionShareHub('ff_test', options);
+    const promotedFirst = jest.fn();
+    const promotedSecond = jest.fn();
+
+    await leader.join();
+    first.onPromote(promotedFirst);
+    second.onPromote(promotedSecond);
+    await first.join();
+    await second.join();
+
+    leader.destroy();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(promotedFirst.mock.calls.length + promotedSecond.mock.calls.length).toBe(1);
+    expect([first.currentRole, second.currentRole].filter((role) => role === 'leader')).toHaveLength(1);
+
+    first.destroy();
+    second.destroy();
   });
 });

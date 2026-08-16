@@ -116,9 +116,11 @@ export class LongPollingTransport<C, T> implements Transport<C, T> {
     return JSON.stringify(newFlags) !== JSON.stringify(this.currentFlags);
   }
 
-  async fetchFlags(context: C): Promise<Record<string, T>> {
+  async fetchFlags(context: C, options?: { persist?: boolean }): Promise<Record<string, T>> {
     const contextWithSource = ensureContextSource(context);
-    this.currentContext = contextWithSource;
+    if (options?.persist !== false) {
+      this.currentContext = contextWithSource;
+    }
 
     const res = await fetch(this.endpoint, {
       method: 'POST',

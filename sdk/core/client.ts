@@ -40,6 +40,8 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
   cacheAdapter?: CacheAdapter<C>;
   restEndpoint?: string;
   sseEndpoint?: string;
+  /** Override the ASL handshake URL. Use with `sseEndpoint` for self-hosted gateways. */
+  handshakeEndpoint?: string;
   debugLog?: boolean; // this option should be true, if a user wants access to flagmint internal logs
   env?: string;
   enableFlagmint: boolean; // this is used to trigger connection to Flagmint service. This prevents connection when in dev and reduced billing.
@@ -55,12 +57,14 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
    *
    * Followers do not handshake or open EventSource. They receive flags from the
    * leader and forward updateContext() to it. Do not enable this when two clients
-   * must evaluate different contexts at the same time on one page.
+   * must evaluate different contexts at the same time on one page, or when the
+   * origin hosts untrusted documents that should not steer or read this stream.
    */
   shareConnection?: boolean;
 }
 
 const DEFAULT_CACHE_TTL = 24 * 60 * 60 * 1000;
+const HANDSHAKE_TIMEOUT_MS = 10000;
 
 /**
  * Get default endpoints based on NODE_ENV
@@ -91,8 +95,9 @@ function getDefaultEndpoints(env?: string): { rest: string; handshakeURL: string
   }
 }
 
-const REST_ENDPOINT = getDefaultEndpoints().rest;
-const SSE_ENDPOINT = getDefaultEndpoints().sse
+function sdkError(message: string, code: string, extra?: Record<string, unknown>): Error {
+  return Object.assign(new Error(message), { code, ...extra });
+}
 
 // Type for subscription callbacks
 type FlagUpdateCallback<T> = (flags: FeatureFlags<T>) => void;
@@ -141,9 +146,10 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     this.persistContext = options.persistContext ?? false;
     this.cacheTTL = DEFAULT_CACHE_TTL;
     this.onError = options.onError;
-    this.restEndpoint = options.restEndpoint ?? getDefaultEndpoints(options.env).rest ?? REST_ENDPOINT;
-    this.sseEndpoint = options.sseEndpoint ?? getDefaultEndpoints(options.env).sse ?? SSE_ENDPOINT;
-    this.aslHandshakeUrl = getDefaultEndpoints(options.env).handshakeURL ?? 'http://localhost:3000/auth/asl-handshake'; // Default to local dev server
+    const defaultEndpoints = getDefaultEndpoints(options.env);
+    this.restEndpoint = options.restEndpoint ?? defaultEndpoints.rest;
+    this.sseEndpoint = options.sseEndpoint ?? defaultEndpoints.sse;
+    this.aslHandshakeUrl = options.handshakeEndpoint ?? defaultEndpoints.handshakeURL;
     this.cacheAdapter = options.cacheAdapter ?? {
       loadFlags: syncCache.loadCachedFlags,
       saveFlags: syncCache.saveCachedFlags,
@@ -283,14 +289,14 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     }
 
     this.shareHub = new ConnectionShareHub<C, T>(this.apiKey);
-    const role = await this.shareHub.join();
-
     this.shareHub.onPromote(async () => {
       logger.log('[FlagClient] Share leader departed. Promoting this document to hold the stream.');
       await this.setupTransport(options);
       this.attachShareLeader();
       this.shareHub?.broadcastFlags(this.flags as Record<string, T>);
     });
+
+    const role = await this.shareHub.join();
 
     if (role === 'follower') {
       logger.log('[FlagClient] Following an existing Flagmint stream in another same-origin document.');
@@ -306,11 +312,11 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
   private attachShareLeader(): void {
     this.shareHub?.setLeaderContextHandler(async (context) => {
-      this.context = { ...this.context, ...context };
+      const mergedContext = { ...this.context, ...context } as C;
       if (!this.transport || typeof this.transport.fetchFlags !== 'function') {
         return this.flags as Record<string, T>;
       }
-      return this.transport.fetchFlags(this.context);
+      return this.transport.fetchFlags(mergedContext, { persist: false });
     });
   }
 
@@ -344,6 +350,18 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
  */
   private async setupTransport(options: FlagClientOptions<C>): Promise<void> {
     logger.log('[FlagClient] setupTransport() started');
+
+    if (options.transport) {
+      this.transport = options.transport;
+      this.bindTransport(this.transport);
+      await this.transport.init();
+      const initialData = (this.transport as { flags?: FeatureFlags<T> }).flags;
+      if (initialData && Object.keys(initialData).length > 0) {
+        this.updateFlags(initialData);
+      }
+      return;
+    }
+
     const mode = options.transportMode ?? 'auto';
 
     const sessionId = await this.fetchFreshSessionId(options.apiKey)
@@ -400,9 +418,12 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       }
     }
 
-    // SseTransport.init() already populates this.flags natively. If present, load local variables instantly.
-    const initialData = (this.transport as any).flags ?? {};
-    this.updateFlags(initialData);
+    // SseTransport.init() already populates its flags. Apply them only when present,
+    // so the long-polling path does not overwrite cached flags with an empty map.
+    const initialData = (this.transport as { flags?: FeatureFlags<T> }).flags;
+    if (initialData && Object.keys(initialData).length > 0) {
+      this.updateFlags(initialData);
+    }
     logger.log('[FlagClient] Flag Client bootstrapping routines successfully finalized.');
   }
 
@@ -474,20 +495,20 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    * Update the evaluation context.
    */
   async updateContext(context: C): Promise<void> {
-    this.context = { ...this.context, ...context };
+    const pendingContext = { ...this.context, ...context };
+    this.context = pendingContext;
     if (this.initializationOptions) {
-      this.initializationOptions.context = this.context; // Ensure context is passed if it was set after construction
+      this.initializationOptions.context = pendingContext;
     }
     if (this.persistContext) {
       await Promise.resolve(
-        this.cacheAdapter.saveContext(this.apiKey, this.context)
+        this.cacheAdapter.saveContext(this.apiKey, pendingContext)
       );
     }
 
-    // Re-fetch flags with new context
     if (this.transport && typeof this.transport.fetchFlags === 'function') {
       try {
-        const updatedFlags = await this.transport.fetchFlags(this.context);
+        const updatedFlags = await this.transport.fetchFlags(pendingContext);
         this.updateFlags(updatedFlags);
       } catch (error) {
         logger.error('[FlagClient] Error updating flags after context change:', error);
@@ -642,33 +663,45 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    * @throws {Error} If the handshake response does not contain a valid session ID.
    */
   private async fetchFreshSessionId(apiKey: string): Promise<string> {
+    const abortController = new AbortController();
+    const abortId = setTimeout(() => abortController.abort(), HANDSHAKE_TIMEOUT_MS);
     try {
       const authenticationHandShake = await fetch(this.aslHandshakeUrl, {
         method: 'POST',
         headers: { 'X-API-Key': apiKey },
+        signal: abortController.signal,
       });
 
       if (authenticationHandShake.status === 401) {
-        throw new Error('ERR_AUTH: Invalid API credentials configuration.');
+        throw sdkError('Invalid API credentials configuration.', 'ERR_AUTH');
       }
       if (authenticationHandShake.status === 429) {
-        throw new Error('ERR_RATE_LIMITED: Client ingestion limits exceeded.');
+        throw sdkError('Client ingestion limits exceeded.', 'ERR_RATE_LIMITED');
       }
       if (!authenticationHandShake.ok) {
-        throw new Error(`Handshake server infrastructure exception (${authenticationHandShake.status})`);
+        throw sdkError(
+          `Handshake server infrastructure exception (${authenticationHandShake.status})`,
+          'ERR_INTERNAL',
+          { statusCode: authenticationHandShake.status }
+        );
       }
 
       const handshakeData = await authenticationHandShake.json();
       const sessionId = handshakeData?.data?.sessionId;
 
-      if (!sessionId) {
-        throw new Error('Handshake parsing error: Remote platform returned empty session token.');
+      if (typeof sessionId !== 'string' || !sessionId) {
+        throw sdkError(
+          'Handshake parsing error: Remote platform returned empty session token.',
+          'ERR_INTERNAL'
+        );
       }
 
       return sessionId;
     } catch (err) {
       logger.error('[FlagClient] Core Handshake failure encountered:', (err as Error).message);
       throw err;
+    } finally {
+      clearTimeout(abortId);
     }
   }
 }

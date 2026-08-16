@@ -1,0 +1,32 @@
+---
+description: Defect-first hardening pass after handshake, reconnect, queue, or shared-state changes in the SDK transport/client.
+globs: sdk/core/transports/**/*.ts,sdk/core/client.ts,sdk/core/helpers/connectionShare.ts
+alwaysApply: true
+---
+
+# Async transport hardening
+
+After changing SSE/client/share async flow, do a defect pass **before** README or product follow-ups. Do not treat happy-path API alignment as done.
+
+## Two passes
+
+1. Match the server contract (handshake, headers, event names, status codes).
+2. Harden shared mutable state. Stop after pass 2, not after pass 1.
+
+## For each shared field
+
+Ask who writes it, what a bad packet does, what a drop between phases does, and what two overlapping callers do.
+
+Fields that have already bitten us: `connectionId`, `this.context`, `connectPromise` / `connectReject`, `this.flags`.
+
+## Do not
+
+- Swallow parse failures as success (`{}` is not a valid `connected`, `flags`, `quota_exceeded`, or named `error` payload).
+- Rewrite queues, timeouts, or control flow the API does not require.
+- Write overlap tests that only check call count — assert **each** request body / argument.
+
+## Tests that must exist for the touched path
+
+- Malformed packet and missing required field
+- Drop between handshake phases (`connected` then `onerror` before `flags`)
+- Overlapping calls with per-call arguments captured before any `await`

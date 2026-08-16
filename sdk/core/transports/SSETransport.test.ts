@@ -103,6 +103,86 @@ describe('SseTransport', () => {
     transport.destroy();
   });
 
+  it('rejects init when the connected event has no connectionId', async () => {
+    const transport = createTransport();
+    const initPromise = transport.init();
+    const es = MockEventSource.instances[0];
+
+    es.emit('connected', 'not-json');
+
+    await expect(initPromise).rejects.toThrow(/connectionId/);
+    expect(es.closed).toBe(true);
+    await expect(transport.fetchFlags({ user: { key: 'u2' } })).rejects.toThrow(
+      /stream connection not active/
+    );
+
+    transport.destroy();
+  });
+
+  it('reconnects if the stream drops after connected but before initial flags', async () => {
+    jest.useFakeTimers();
+    const transport = createTransport();
+    const initPromise = transport.init();
+    const es = MockEventSource.instances[0];
+    es.emit('connected', { connectionId: 'conn-1' });
+
+    es.onerror?.();
+
+    expect(es.closed).toBe(true);
+    await jest.advanceTimersByTimeAsync(2000);
+
+    const es2 = MockEventSource.instances[1];
+    expect(es2).toBeDefined();
+    es2.emit('connected', { connectionId: 'conn-2' });
+    es2.emit('flags', { flags: { foo: true } });
+
+    await expect(initPromise).resolves.toBeUndefined();
+    transport.destroy();
+  });
+
+  it('closes the stream when initial flags never arrive', async () => {
+    jest.useFakeTimers();
+    const transport = createTransport();
+    const initPromise = transport.init();
+    const es = MockEventSource.instances[0];
+    es.emit('connected', { connectionId: 'conn-1' });
+    await Promise.resolve();
+
+    const timedOut = expect(initPromise).rejects.toThrow(/Timeout waiting for initial feature flags/);
+    await jest.advanceTimersByTimeAsync(5000);
+    await timedOut;
+    expect(es.closed).toBe(true);
+
+    es.onerror?.();
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(MockEventSource.instances).toHaveLength(1);
+    await expect(transport.fetchFlags({ user: { key: 'u2' } })).rejects.toThrow(
+      /stream connection not active/
+    );
+
+    transport.destroy();
+  });
+
+  it('ignores a malformed flags packet instead of wiping the current snapshot', async () => {
+    const { transport, es } = await openStream({ foo: true });
+    const received: Array<Record<string, unknown>> = [];
+    transport.onFlagsUpdated((flags) => received.push(flags));
+
+    es.emit('flags', 'not-json');
+    es.emit('flags', { connectionId: 'conn-1' });
+    es.emit('flags', { flags: ['not', 'an', 'object'] });
+
+    expect(received).toHaveLength(0);
+    await expect(
+      new Promise<Record<string, unknown>>((resolve) => {
+        transport.onFlagsUpdated((flags) => resolve(flags));
+        es.emit('flags', { flags: { foo: false } });
+      })
+    ).resolves.toEqual({ foo: false });
+
+    transport.destroy();
+  });
+
   it('POSTs context with x-api-key and waits for flags on the stream, not the HTTP body', async () => {
     const { transport, es } = await openStream({ foo: true });
     const received: Array<Record<string, unknown>> = [];
@@ -151,6 +231,8 @@ describe('SseTransport', () => {
     await flush();
 
     expect(global.fetch).toHaveBeenCalledTimes(1);
+    const firstBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+    expect(firstBody.context.user.key).toBe('first');
 
     resolveFetch({
       ok: true,
@@ -230,6 +312,31 @@ describe('SseTransport', () => {
     transport.destroy();
   });
 
+  it('ignores malformed quota and named error packets instead of killing the stream', async () => {
+    const { transport, es } = await openStream({ foo: true });
+    const errors: Error[] = [];
+    transport.onError((err) => errors.push(err));
+
+    es.emit('quota_exceeded', 'not-json');
+    es.emit('quota_exceeded', { connectionId: 'conn-1' });
+    es.emit('error', 'not-json');
+    es.emit('error', { message: 'missing error code' });
+
+    expect(errors).toHaveLength(0);
+
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({ statusCode: 202 }),
+    });
+    const flagsPromise = transport.fetchFlags({ user: { key: 'u2' } });
+    await flush();
+    es.emit('flags', { flags: { foo: false } });
+    await expect(flagsPromise).resolves.toEqual({ foo: false });
+
+    transport.destroy();
+  });
+
   it('maps HTTP 429 on context POST to ERR_RATE_LIMITED and applies cached flags', async () => {
     const { transport } = await openStream({ foo: true });
     const flags: Array<Record<string, unknown>> = [];
@@ -264,6 +371,47 @@ describe('SseTransport', () => {
     });
 
     await expect(transport.fetchFlags({ user: { key: 'u2' } })).rejects.toThrow(/not found or is dead/);
+    transport.destroy();
+  });
+
+  it('aborts a hung context POST so a later update is not stuck behind it', async () => {
+    const { transport, es } = await openStream({ foo: true });
+    jest.useFakeTimers();
+
+    let calls = 0;
+    (global.fetch as jest.Mock).mockImplementation((_url: string, init: { signal?: AbortSignal }) => {
+      calls += 1;
+      if (calls === 1) {
+        return new Promise((_resolve, reject) => {
+          const abort = () => {
+            const err = new Error('The operation was aborted.');
+            err.name = 'AbortError';
+            reject(err);
+          };
+          if (init.signal?.aborted) {
+            abort();
+            return;
+          }
+          init.signal?.addEventListener('abort', abort);
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 202,
+        json: async () => ({ statusCode: 202 }),
+      });
+    });
+
+    const hung = transport.fetchFlags({ user: { key: 'hung' } });
+    const later = transport.fetchFlags({ user: { key: 'later' } });
+    const hungAborted = expect(hung).rejects.toMatchObject({ name: 'AbortError' });
+    await jest.advanceTimersByTimeAsync(5000);
+    await hungAborted;
+
+    await Promise.resolve();
+    es.emit('flags', { flags: { later: true } });
+    await expect(later).resolves.toEqual({ later: true });
+
     transport.destroy();
   });
 });
