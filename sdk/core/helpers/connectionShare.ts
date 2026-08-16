@@ -1,3 +1,30 @@
+/**
+ * Same-origin connection sharing for Flagmint streaming transports.
+ *
+ * When two or more FlagClient instances run in the same origin — typical cases
+ * are a host page plus sibling iframes, or two widgets on one Python-embedded
+ * page — each would otherwise open its own ASL handshake and SSE/long-poll
+ * stream. That doubles evaluation quota and is almost never intended.
+ *
+ * This hub elects a single **leader** per API key:
+ *
+ * - **Leader** holds the real transport (handshake + EventSource). It broadcasts
+ *   flag snapshots and errors over {@link BroadcastChannel}.
+ * - **Followers** skip handshake and EventSource. They apply the leader's flags
+ *   and forward `updateContext()` to the leader, which runs it on the shared
+ *   stream.
+ *
+ * Leadership is stored in `localStorage` (`flagmint_share_lock:<apiKey>`) with a
+ * short TTL and heartbeat. If the leader document unloads, it posts `bye` and
+ * releases the lock; another member takes over and opens a new stream.
+ *
+ * Sharing is a **browser** feature. Node cluster workers each need their own
+ * stream — {@link isConnectionSharingAvailable} is false there. Do not share
+ * when two clients on one page must keep different evaluation contexts at the
+ * same time; `/context` is per connection, so the last write wins.
+ *
+ * @module connectionShare
+ */
 import type { Transport } from '@/core/transports/Transport';
 import { logger } from '@/core/helpers/logger';
 
@@ -6,8 +33,19 @@ const HEARTBEAT_MS = 1500;
 const FOLLOWER_WAIT_MS = 5000;
 const CONTEXT_WAIT_MS = 5000;
 
+/** Role this document plays in the share group for a given API key. */
 export type ShareRole = 'leader' | 'follower';
 
+/**
+ * Messages exchanged on `flagmint-share:<apiKey>`.
+ *
+ * - `hello` — follower asking the leader to replay the current flag snapshot.
+ * - `alive` — leader heartbeat; followers use lock TTL, not this, to detect death.
+ * - `flags` — evaluated flag map from the leader's stream.
+ * - `error` — transport/quota error mirrored to followers (`onError`).
+ * - `context-request` / `context-result` — follower `updateContext` RPC.
+ * - `bye` — leader is leaving; followers may acquire the lock.
+ */
 type ShareMessage<C = unknown, T = unknown> =
   | { type: 'hello'; memberId: string }
   | { type: 'alive'; memberId: string }
@@ -17,34 +55,52 @@ type ShareMessage<C = unknown, T = unknown> =
   | { type: 'context-result'; requestId: string; flags?: Record<string, T>; error?: { message: string; code?: string } }
   | { type: 'bye'; memberId: string };
 
+/**
+ * Persistence used for the leadership lock.
+ * Defaults to `localStorage` so sibling iframes on the same origin can compete.
+ */
 export interface ShareStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
   removeItem(key: string): void;
 }
 
+/**
+ * Cross-document bus. Production uses {@link BroadcastChannel};
+ * tests inject an in-memory implementation.
+ */
 export interface ShareChannel {
   postMessage(data: unknown): void;
   close(): void;
   onmessage: ((event: { data: unknown }) => void) | null;
 }
 
+/**
+ * Test/runtime hooks. Omit in production — the hub uses `BroadcastChannel`,
+ * `localStorage`, and `setInterval`.
+ */
 export interface ConnectionShareOptions {
+  /** Override `new BroadcastChannel(name)` (tests). */
   channelFactory?: (name: string) => ShareChannel;
+  /** Override `localStorage` for the leadership lock (tests). */
   storage?: ShareStorage;
+  /** Clock used for lock expiry. */
   now?: () => number;
   setTimer?: (handler: () => void, ms: number) => ReturnType<typeof setInterval>;
   clearTimer?: (id: ReturnType<typeof setInterval>) => void;
 }
 
+/** `localStorage` payload for `flagmint_share_lock:<apiKey>`. */
 interface LockRecord {
   ownerId: string;
   expiresAt: number;
 }
 
 /**
- * True in same-origin browser documents (including sibling iframes).
- * False in Node cluster workers — each process must keep its own stream.
+ * Whether this runtime can share a stream across documents.
+ *
+ * @returns `true` in a browser with {@link BroadcastChannel} (includes same-origin
+ * iframes). `false` in Node, so cluster workers each keep their own connection.
  */
 export function isConnectionSharingAvailable(): boolean {
   return typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined';
@@ -55,11 +111,17 @@ function randomMemberId(): string {
 }
 
 /**
- * Elects a single SSE/long-poll leader per API key across same-origin
- * documents (tabs and iframes). Followers receive flag snapshots over
- * BroadcastChannel and forward context updates to the leader.
+ * Elects a single streaming leader per API key across same-origin documents.
+ *
+ * {@link FlagClient} constructs one hub when `shareConnection` is enabled (the
+ * browser default). The leader opens SSE; followers use
+ * {@link ConnectionShareHub.createFollowerTransport} instead.
+ *
+ * @template C Evaluation context forwarded from follower `updateContext` calls.
+ * @template T Flag value type in snapshots broadcast by the leader.
  */
 export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
+  /** Stable id for this document in channel messages and the lock record. */
   readonly memberId = randomMemberId();
   private role: ShareRole = 'follower';
   private channel: ShareChannel | null = null;
@@ -84,6 +146,10 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
   private readonly lockKey: string;
   private readonly channelName: string;
 
+  /**
+   * @param apiKey Share groups are keyed by API key. Distinct keys never share.
+   * @param options Optional test doubles for channel, storage, and timers.
+   */
   constructor(
     private readonly apiKey: string,
     options: ConnectionShareOptions = {}
@@ -97,10 +163,20 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     this.clearTimer = options.clearTimer ?? ((id) => clearInterval(id));
   }
 
+  /** `leader` if this document holds the lock; otherwise `follower`. */
   get currentRole(): ShareRole {
     return this.role;
   }
 
+  /**
+   * Join the share group: compete for the lock, subscribe to the channel.
+   *
+   * If {@link BroadcastChannel} is missing, this member becomes leader locally
+   * and never shares (same as a Node process).
+   *
+   * @returns The role this member should take. Only the leader should call
+   * ASL handshake / `SseTransport.init()`.
+   */
   async join(): Promise<ShareRole> {
     this.channel = this.openChannel();
     if (!this.channel) {
@@ -122,20 +198,34 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     return this.role;
   }
 
+  /**
+   * Invoked after a follower wins the lock (leader `bye` or expired heartbeat).
+   * The client should open a real transport here, then
+   * {@link ConnectionShareHub.broadcastFlags}.
+   */
   onPromote(callback: () => void | Promise<void>): void {
     this.onPromoteCallback = callback;
   }
 
+  /**
+   * Leader-only: run `updateContext` on the real transport when a follower
+   * sends `context-request`.
+   */
   setLeaderContextHandler(handler: (context: C) => Promise<Record<string, T>>): void {
     this.leaderContextHandler = handler;
   }
 
+  /**
+   * Leader-only: publish the current evaluated flags to all followers.
+   * No-op on followers (avoids echo loops).
+   */
   broadcastFlags(flags: Record<string, T>): void {
     if (this.role !== 'leader' || !this.channel) return;
     this.latestFlags = flags;
     this.channel.postMessage({ type: 'flags', memberId: this.memberId, flags });
   }
 
+  /** Leader-only: mirror a transport `onError` (auth, quota) to followers. */
   broadcastError(error: Error): void {
     if (this.role !== 'leader' || !this.channel) return;
     this.channel.postMessage({
@@ -147,6 +237,11 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     });
   }
 
+  /**
+   * Transport used by follower FlagClients. `init` waits for the leader
+   * snapshot; `fetchFlags` RPCs `updateContext` through the leader.
+   * `destroy` is a no-op — {@link ConnectionShareHub.destroy} owns teardown.
+   */
   createFollowerTransport(): Transport<C, T> {
     return {
       init: async () => {
@@ -164,6 +259,11 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     };
   }
 
+  /**
+   * Leave the share group. Leaders release the lock and post `bye` so another
+   * iframe can open the stream. Channel close is deferred one tick so `bye`
+   * can flush on native {@link BroadcastChannel}.
+   */
   destroy(): void {
     if (this.closed) return;
     this.closed = true;
@@ -187,6 +287,7 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     this.contextWaiters.clear();
   }
 
+  /** Open the BroadcastChannel for this API key, or a test factory channel. */
   private openChannel(): ShareChannel | null {
     if (this.channelFactory) {
       return this.channelFactory(this.channelName);
@@ -197,6 +298,7 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     return new BroadcastChannel(this.channelName) as unknown as ShareChannel;
   }
 
+  /** Mark this member leader and start lock heartbeat + `alive` pings. */
   private becomeLeader(): void {
     this.role = 'leader';
     if (this.watchId) {
@@ -210,6 +312,10 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     logger.log('[ConnectionShare] Elected leader for API key share group.');
   }
 
+  /**
+   * Follower poll: if the lock is free or expired, take it and run
+   * {@link ConnectionShareHub.onPromote}.
+   */
   private async maybeTakeover(): Promise<void> {
     if (this.closed || this.role === 'leader') return;
     if (!this.tryAcquireLock()) return;
@@ -224,6 +330,7 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     }
   }
 
+  /** Dispatch a {@link ShareMessage} from another document in the group. */
   private handleMessage(message: ShareMessage<C, T>): void {
     if (!message || typeof message !== 'object') return;
 
@@ -279,6 +386,7 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     }
   }
 
+  /** Leader: evaluate a follower's context on the real transport and reply. */
   private async handleContextRequest(
     message: Extract<ShareMessage<C, T>, { type: 'context-request' }>
   ): Promise<void> {
@@ -308,6 +416,10 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     }
   }
 
+  /**
+   * Block until the leader has sent a `flags` snapshot, or {@link FOLLOWER_WAIT_MS}.
+   * Used by follower `init()`.
+   */
   private waitForFlags(): Promise<Record<string, T>> {
     if (this.latestFlags) return Promise.resolve(this.latestFlags);
 
@@ -325,6 +437,10 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     });
   }
 
+  /**
+   * Follower `fetchFlags`: ask the leader to POST `/context` and wait for
+   * `context-result`. Leaders run the handler locally.
+   */
   private requestContextUpdate(context: C): Promise<Record<string, T>> {
     if (this.role === 'leader') {
       if (!this.leaderContextHandler) {
@@ -360,6 +476,7 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     });
   }
 
+  /** Read the leadership lock, or `null` if missing/corrupt. */
   private readLock(): LockRecord | null {
     if (!this.storage) return null;
     try {
@@ -373,6 +490,12 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     }
   }
 
+  /**
+   * Compare-and-set the lock. Re-reads after write so two iframes racing
+   * cannot both believe they won.
+   *
+   * @returns `true` if this member owns the lock.
+   */
   private tryAcquireLock(): boolean {
     if (!this.storage) return true;
     const now = this.now();
@@ -386,6 +509,7 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     return confirmed?.ownerId === this.memberId;
   }
 
+  /** Extend lock expiry; no-op if another member stole the lock. */
   private refreshLock(): void {
     if (this.role !== 'leader' || !this.storage) return;
     const current = this.readLock();
@@ -398,6 +522,7 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     );
   }
 
+  /** Drop the lock only if this member still owns it. */
   private releaseLock(): void {
     const current = this.readLock();
     if (current?.ownerId === this.memberId) {
