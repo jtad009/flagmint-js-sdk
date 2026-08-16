@@ -6,6 +6,10 @@ import { evaluateFlagValue } from '@/core/evaluation/evaluateFlagValue';
 import * as syncCache from '@/core/helpers/cacheHelper';
 import { logger } from '@/core/helpers/logger';
 import { SseTransport } from './transports/SSETransport';
+import {
+  ConnectionShareHub,
+  isConnectionSharingAvailable,
+} from '@/core/helpers/connectionShare';
 
 type TransportMode = 'auto' | 'long-polling' | 'sse';
 
@@ -44,6 +48,16 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
     version: string;
   }
   EventSourceImpl?: any
+  /**
+   * Share one streaming connection across same-origin documents (tabs / iframes)
+   * that use the same API key. Defaults to true in browsers with BroadcastChannel,
+   * false in Node (cluster workers each keep their own stream).
+   *
+   * Followers do not handshake or open EventSource. They receive flags from the
+   * leader and forward updateContext() to it. Do not enable this when two clients
+   * must evaluate different contexts at the same time on one page.
+   */
+  shareConnection?: boolean;
 }
 
 const DEFAULT_CACHE_TTL = 24 * 60 * 60 * 1000;
@@ -64,13 +78,13 @@ function getDefaultEndpoints(env?: string): { rest: string; handshakeURL: string
     case 'development':
       return {
         sse: 'http://localhost:3000/evaluator/v2/flags',
-        rest: 'https://localhost:3000/evaluator/evaluate',
+        rest: 'http://localhost:3000/evaluator/evaluate',
         handshakeURL: 'http://localhost:3000/auth/asl-handshake'
       };
     case 'production':
     default:
       return {
-        sse: 'https://staging-api.flagmint.com/evaluator/v2/flags',
+        sse: 'https://api.flagmint.com/evaluator/v2/flags',
         rest: 'https://api.flagmint.com/evaluator/evaluate',
         handshakeURL: 'https://api.flagmint.com/auth/asl-handshake'
       };
@@ -114,6 +128,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
   // NEW: Subscription management
   private subscribers: Set<FlagUpdateCallback<T>> = new Set();
+  private shareHub: ConnectionShareHub<C, T> | null = null;
+  private shareConnection: boolean;
 
   /**
    * Creates a new FlagClient instance.
@@ -141,6 +157,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     this.deferInitialization = options.deferInitialization ?? false;
     this.env = options.env;
     this.enableFlagmint = options.enableFlagmint ?? true;
+    this.shareConnection =
+      options.shareConnection ?? isConnectionSharingAvailable();
 
     logger.setup({ debugLog: options.debugLog });
 
@@ -207,8 +225,15 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
         }
       }
 
-      // C) Transport setup + first fetch
+      // C) Same-origin iframe/tab share, then transport setup
+      if (await this.joinConnectionShare(options)) {
+        this.isInitialized = true;
+        this.resolveReady();
+        return;
+      }
+
       await this.setupTransport(options);
+      this.shareHub?.broadcastFlags(this.flags as Record<string, T>);
 
       // D) Mark as initialized and resolve
       this.isInitialized = true;
@@ -233,8 +258,64 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     }
   }
 
+  private bindTransport(transport: Transport<C, T>): void {
+    if (typeof transport.onFlagsUpdated === 'function') {
+      transport.onFlagsUpdated((updatedFlags) => {
+        logger.log('[FlagClient] Flags updated via transport line stream notification:', updatedFlags);
+        this.updateFlags(updatedFlags);
+      });
+    }
+    if (typeof transport.onError === 'function') {
+      transport.onError((error) => {
+        logger.error('[FlagClient] Transport error:', error);
+        this.shareHub?.broadcastError(error);
+        this.onError?.(error);
+      });
+    }
+  }
+
   /**
- * Creates and initializes the transport layer used to receive feature flag
+   * @returns true when this document is a follower and should skip opening a stream.
+   */
+  private async joinConnectionShare(options: FlagClientOptions<C>): Promise<boolean> {
+    if (!this.shareConnection || !isConnectionSharingAvailable() || options.transport) {
+      return false;
+    }
+
+    this.shareHub = new ConnectionShareHub<C, T>(this.apiKey);
+    const role = await this.shareHub.join();
+
+    this.shareHub.onPromote(async () => {
+      logger.log('[FlagClient] Share leader departed. Promoting this document to hold the stream.');
+      await this.setupTransport(options);
+      this.attachShareLeader();
+      this.shareHub?.broadcastFlags(this.flags as Record<string, T>);
+    });
+
+    if (role === 'follower') {
+      logger.log('[FlagClient] Following an existing Flagmint stream in another same-origin document.');
+      this.transport = this.shareHub.createFollowerTransport();
+      this.bindTransport(this.transport);
+      await this.transport.init();
+      return true;
+    }
+
+    this.attachShareLeader();
+    return false;
+  }
+
+  private attachShareLeader(): void {
+    this.shareHub?.setLeaderContextHandler(async (context) => {
+      this.context = { ...this.context, ...context };
+      if (!this.transport || typeof this.transport.fetchFlags !== 'function') {
+        return this.flags as Record<string, T>;
+      }
+      return this.transport.fetchFlags(this.context);
+    });
+  }
+
+  /**
+ * Creates and initializes the transport layer used to receive feature flags
  * updates from the Flagmint platform.
  *
  * This method performs the authentication handshake to obtain a fresh session
@@ -270,21 +351,24 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       throw new Error('Handshake parsing error: Remote platform returned empty identity session token strings.');
     }
 
-    // --- Transport Factory Instantiators (Clean, listener-free instantiation wrappers) ---
+    // --- Transport factory ---
+
+    const bindTransport = (transport: Transport<C, T>) => this.bindTransport(transport);
 
     const useSSE = async (): Promise<Transport<C, T>> => {
       logger.log('[FlagClient] Initializing Server-Sent Events (SSE) streaming transport...', this.context);
-      // Standardizes pass matching endpoint schemas explicitly using handshake credentials
       const sse = new SseTransport<C, T>(
         this.sseEndpoint,
         sessionId,
         this.context,
         () => this.fetchFreshSessionId(options.apiKey),
         {
+          apiKey: options.apiKey,
           wrapper: options.wrapperInfo,
           EventSourceImpl: options.EventSourceImpl
         }
       );
+      bindTransport(sse);
       await sse.init();
       logger.log('[FlagClient] SSE streaming transport initialized successfully.');
       return sse;
@@ -297,6 +381,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
         maxBackoffMs: 60000,
         backoffMultiplier: 2
       });
+      bindTransport(lp);
       void lp.init();
       return lp;
     };
@@ -315,16 +400,6 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       }
     }
 
-    // 2. FIXED: Standardized Callback Attachment Pattern
-    // Attaches exactly one single state listener block down the chosen execution line
-    if (typeof this.transport.onFlagsUpdated === 'function') {
-      this.transport.onFlagsUpdated((updatedFlags) => {
-        logger.log('[FlagClient] Flags updated via transport line stream notification:', updatedFlags);
-        this.updateFlags(updatedFlags);
-      });
-    }
-
-    // 3. FIXED: Deduplicated Performance Optimization 
     // SseTransport.init() already populates this.flags natively. If present, load local variables instantly.
     const initialData = (this.transport as any).flags ?? {};
     this.updateFlags(initialData);
@@ -335,7 +410,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    * Updates flags and notifies all subscribers.
    * This is the centralized method for any flag update.
    */
-  private updateFlags(newFlags: FeatureFlags<T>): void {
+  private updateFlags(newFlags: FeatureFlags<T>, fromShare = false): void {
     this.flags = newFlags;
 
     // Cache the new flags
@@ -347,6 +422,10 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
     // Notify all subscribers
     this.notifySubscribers();
+
+    if (!fromShare) {
+      this.shareHub?.broadcastFlags(newFlags as Record<string, T>);
+    }
   }
 
   /**
@@ -429,6 +508,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     if (this.transport) {
       this.transport.destroy();
     }
+    this.shareHub?.destroy();
+    this.shareHub = null;
   }
 
   /**

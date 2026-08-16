@@ -16,9 +16,8 @@ async function performHandshake(apiKey) {
   console.log('Handshake response:', data, apiKey);
   if (res.ok) {
     console.log('\x1b[32m%s\x1b[0m', '✔ Handshake Successful!');
-    console.log('Session ID:           ', data.data.sessionId);
-    console.log('Server Public Key Hex:', data.data.serverPublicKeyHex);
-    return { sessionId: data.data.sessionId, serverPublicKeyHex: data.data.serverPublicKeyHex };
+    console.log('Session ID:', data.data.sessionId);
+    return { sessionId: data.data.sessionId };
   } else {
     throw new Error(`Handshake failure: ${data.error || JSON.stringify(data)}`);
   }

@@ -5,4 +5,5 @@ export interface Transport<C, T> {
   destroy(): void;
   onFlagsUpdated?: (callback: (flags: Record<string, T>) => void) => void;
   onContextUpdated?: (callback: (context: C) => void) => void;
+  onError?: (callback: (error: Error) => void) => void;
 }

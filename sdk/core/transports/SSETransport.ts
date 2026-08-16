@@ -7,28 +7,61 @@ export interface SseTransportConfig {
   apiKey: string;
   context: any;
   wrapper?: { name: string; version: string };
-
-  // THE ISOMORPHIC FIX: Allow passing a custom EventSource implementation class
   EventSourceImpl?: any;
+}
+
+const INITIAL_FLAGS_TIMEOUT_MS = 5000;
+const CONTEXT_UPDATE_TIMEOUT_MS = 5000;
+const MAX_RECONNECT_DELAY_MS = 15000;
+
+/**
+ * Encodes evaluation context as URL-safe base64 matching FF-EU's
+ * `Buffer.from(encodedContext, 'base64').toString('utf8')` decoder.
+ */
+function encodeContextQueryParam(context: unknown): string {
+  const json = JSON.stringify(context);
+  let base64: string;
+  if (typeof Buffer !== 'undefined' && typeof Buffer.from === 'function') {
+    base64 = Buffer.from(json, 'utf8').toString('base64');
+  } else {
+    const bytes = new TextEncoder().encode(json);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    base64 = btoa(binary);
+  }
+  return encodeURIComponent(base64);
+}
+
+function createSdkError(
+  message: string,
+  code: string,
+  extra?: Record<string, unknown>
+): Error {
+  const err = new Error(message);
+  Object.assign(err, { code, ...extra });
+  return err;
+}
+
+function parseEventData(event: MessageEvent): Record<string, any> {
+  try {
+    return JSON.parse(event.data) as Record<string, any>;
+  } catch {
+    return {};
+  }
 }
 
 /**
  * A Server-Sent Events (SSE) transport implementation responsible for
  * maintaining a persistent streaming connection to the Flagmint platform.
  *
- * The transport establishes an authenticated SSE connection, receives
- * real-time feature flag updates, and notifies the FlagClient whenever the
- * active flag set changes. It also supports context synchronization, allowing
- * feature flags to be re-evaluated without recreating the streaming session.
- *
- * To improve reliability, the transport automatically:
- * - Waits for the initial feature flag payload before completing initialization.
- * - Serializes context update requests to prevent stale flag evaluations.
- * - Detects connection failures and performs exponential backoff reconnection.
- * - Refreshes single-use session credentials before reconnecting when a
- *   refresh callback is provided.
- * - Cleans up event listeners and internal state during teardown to prevent
- *   memory leaks.
+ * Handshake: `POST /auth/asl-handshake` issues a single-use sessionId.
+ * Stream: `GET {endpoint}/stream?sessionId&context&sdkVersion&platform&wrapper*`
+ *   emits `connected` then `flags`. Heartbeats are SSE comments (`: heartbeat`)
+ *   and are not visible to EventSource — they only keep the TCP connection alive.
+ * Context: `POST {endpoint}/context` with `x-api-key` returns 202 and the
+ *   re-evaluated flags arrive on the existing stream after a 400ms debounce.
  *
  * @template C The shape of the evaluation context sent to the Flagmint server.
  * @template T The feature flag value type returned by the platform.
@@ -41,21 +74,26 @@ export class SseTransport<C, T> implements Transport<C, T> {
   private context: C;
   private connectionId: string | null = null;
   private onFlagsUpdatedCallback?: (flags: Record<string, T>) => void;
+  private onErrorCallback?: (error: Error) => void;
 
   private initialFlagsReceived = false;
   private initialFlagsResolve: (() => void) | null = null;
   private initialFlagsReject: ((err: Error) => void) | null = null;
   private nextFlagsResolve: (() => void) | null = null;
 
-  // Improvement #1: Store connection execution promise to avoid dual-invocation races
   private connectPromise: Promise<void> | null = null;
+  private connectResolve: (() => void) | null = null;
+  private connectReject: ((err: Error) => void) | null = null;
 
-  // Improvement #3: Retain explicit references for complete teardown operations
   private connectionListener?: (event: MessageEvent) => void;
   private flagsListener?: (event: MessageEvent) => void;
+  private quotaListener?: (event: MessageEvent) => void;
+  private errorListener?: (event: MessageEvent) => void;
 
   private reconnectTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
+  private terminalClose = false;
+  private contextUpdateQueue: Promise<void> = Promise.resolve();
 
   constructor(
     private endpoint: string,
@@ -75,7 +113,6 @@ export class SseTransport<C, T> implements Transport<C, T> {
       this.initialFlagsReject = reject;
     });
 
-    // Fire the shared connection promise sequence
     await this.connect().catch((err) => {
       this.initialFlagsReject?.(err);
       this.resetInitialResolvers();
@@ -86,7 +123,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
     const timeoutPromise = new Promise<void>((_, reject) => {
       timeoutId = setTimeout(() => {
         reject(new Error('Timeout waiting for initial feature flags stream packet from server.'));
-      }, 5000);
+      }, INITIAL_FLAGS_TIMEOUT_MS);
     });
 
     try {
@@ -96,40 +133,93 @@ export class SseTransport<C, T> implements Transport<C, T> {
     }
   }
 
+  /**
+   * POST /v2/flags/context. FF-EU always returns 202 and pushes the next
+   * `flags` event on the open SSE stream (after a 400ms debounce). The HTTP
+   * body does not contain evaluated flags — browser and Node share this path.
+   */
   async fetchFlags(context: C): Promise<Record<string, T>> {
     this.context = ensureContextSource(context);
-    
+
+    const previous = this.contextUpdateQueue;
+    let release!: () => void;
+    this.contextUpdateQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    try {
+      await previous;
+      return await this.performContextUpdate();
+    } finally {
+      release();
+    }
+  }
+
+  onFlagsUpdated(callback: (flags: Record<string, T>) => void): void {
+    this.onFlagsUpdatedCallback = callback;
+  }
+
+  onError(callback: (error: Error) => void): void {
+    this.onErrorCallback = callback;
+  }
+
+  destroy(): void {
+    logger.log('[SseTransport] Initiating clean class resource teardown...');
+    this.terminalClose = true;
+    this.cleanupEventSource();
+    this.flags = {};
+    this.onFlagsUpdatedCallback = undefined;
+    this.onErrorCallback = undefined;
+    this.resetInitialResolvers();
+    this.nextFlagsResolve = null;
+  }
+
+  private get apiKey(): string {
+    return this.configOptions?.apiKey ?? '';
+  }
+
+  private applyFlags(nextFlags: Record<string, T>): void {
+    this.flags = nextFlags;
+    this.onFlagsUpdatedCallback?.(this.flags);
+
+    if (!this.initialFlagsReceived) {
+      this.initialFlagsReceived = true;
+      this.initialFlagsResolve?.();
+      this.resetInitialResolvers();
+    }
+
+    if (this.nextFlagsResolve) {
+      this.nextFlagsResolve();
+      this.nextFlagsResolve = null;
+    }
+  }
+
+  private emitError(err: Error, options: { rejectInit?: boolean } = {}): void {
+    if (options.rejectInit && !this.initialFlagsReceived) {
+      if (this.connectReject) {
+        this.connectReject(err);
+        this.connectReject = null;
+        this.connectResolve = null;
+        this.resetInitialResolvers();
+        return;
+      }
+      this.initialFlagsReject?.(err);
+      this.resetInitialResolvers();
+      return;
+    }
+    this.onErrorCallback?.(err);
+  }
+
+  private async performContextUpdate(): Promise<Record<string, T>> {
     if (!this.connectionId) {
       throw new Error('SSE configuration update blocked: stream connection not active.');
     }
 
-    // THE SEPARATION FIX: Check if running inside a concurrent Node.js/Backend Server env
-    const isServerEnvironment = typeof window === 'undefined';
-
-    if (isServerEnvironment) {
-      // Backend Server Mode: Perform a completely stateless evaluation call
-      // This allows thousands of parallel API controller requests to fetch rules safely 
-      // concurrently without using locks or interrupting the long-lived SSE update line.
-      const response = await fetch(`${this.endpoint}/context`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          connectionId: this.connectionId,
-          context: this.context,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Server execution evaluation loop failed (${response.status})`);
-      }
-
-      const payload = await response.json();
-      return payload.flags ?? {};
-    }
-
-    // Improvement #5: Hard reject parallel context calls to avoid delivering stale configurations
-    if (this.nextFlagsResolve) {
-      throw new Error('Context update already in progress. Please await current modification cycles.');
+    if (!this.apiKey) {
+      throw createSdkError(
+        'SSE context update requires an API key.',
+        'ERR_AUTH'
+      );
     }
 
     let timeoutId: ReturnType<typeof setTimeout>;
@@ -138,43 +228,116 @@ export class SseTransport<C, T> implements Transport<C, T> {
       timeoutId = setTimeout(() => {
         logger.warn('[SseTransport] Delta configuration broadcast exceeded timeout limits. Yielding cached array.');
         resolve();
-      }, 3000);
+      }, CONTEXT_UPDATE_TIMEOUT_MS);
     });
 
     try {
       const response = await fetch(`${this.endpoint}/context`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.apiKey,
+        },
         body: JSON.stringify({
           connectionId: this.connectionId,
           context: this.context,
         }),
       });
 
+      if (response.status === 429) {
+        const payload = await this.safeReadJson(response);
+        this.handleQuotaPayload(payload, { fromHttp: true });
+        throw createSdkError(
+          payload.message || 'Monthly evaluation limit exceeded.',
+          'ERR_RATE_LIMITED',
+          this.quotaExtra(payload)
+        );
+      }
+
+      if (response.status === 401 || response.status === 403) {
+        throw createSdkError(
+          'Unauthorized: Invalid API key',
+          'ERR_AUTH'
+        );
+      }
+
+      if (response.status === 404) {
+        this.scheduleActiveReconnection();
+        throw new Error('SSE connection is not found or is dead. Reconnecting...');
+      }
+
       if (!response.ok) {
         throw new Error(`Server failed context synchronization routine (${response.status})`);
       }
 
+      // 202 Accepted: flags arrive on the stream after the server debounce window.
       await nextFlagsPromise;
     } finally {
       clearTimeout(timeoutId!);
-      this.nextFlagsResolve = null;
+      if (this.nextFlagsResolve) {
+        this.nextFlagsResolve = null;
+      }
     }
 
     return this.flags;
   }
 
-  onFlagsUpdated(callback: (flags: Record<string, T>) => void): void {
-    this.onFlagsUpdatedCallback = callback;
+  private async safeReadJson(response: Response): Promise<Record<string, any>> {
+    try {
+      return (await response.json()) as Record<string, any>;
+    } catch {
+      return {};
+    }
   }
 
-  destroy(): void {
-    logger.log('[SseTransport] Initiating clean class resource teardown...');
+  private quotaExtra(payload: Record<string, any>): Record<string, unknown> {
+    const retryAfter = typeof payload.retryAfter === 'number' ? payload.retryAfter : undefined;
+    return {
+      retryAfter,
+      resetTime:
+        typeof retryAfter === 'number'
+          ? new Date(Date.now() + retryAfter * 1000).toISOString()
+          : undefined,
+      upgradeUrl: payload.upgradeUrl,
+      statusCode: payload.statusCode ?? 429,
+    };
+  }
+
+  private handleQuotaPayload(
+    payload: Record<string, any>,
+    options: { fromHttp?: boolean } = {}
+  ): void {
+    const hadInitialFlags = this.initialFlagsReceived;
+    const cachedFlags = payload.data;
+    const hasCachedFlags =
+      cachedFlags && typeof cachedFlags === 'object' && !Array.isArray(cachedFlags);
+
+    if (hasCachedFlags) {
+      this.applyFlags(cachedFlags as Record<string, T>);
+    }
+
+    if (options.fromHttp) {
+      return;
+    }
+
+    const err = createSdkError(
+      payload.message || 'Monthly evaluation limit exceeded.',
+      'ERR_RATE_LIMITED',
+      this.quotaExtra(payload)
+    );
+
+    this.terminalClose = true;
+
+    if (!hadInitialFlags && !hasCachedFlags) {
+      this.emitError(err, { rejectInit: true });
+    } else {
+      this.connectResolve?.();
+      this.connectResolve = null;
+      this.connectReject = null;
+      this.onErrorCallback?.(err);
+    }
+
     this.cleanupEventSource();
-    this.flags = {};
-    this.onFlagsUpdatedCallback = undefined;
-    this.resetInitialResolvers();
-    this.nextFlagsResolve = null;
   }
 
   private cleanupEventSource(): void {
@@ -189,95 +352,102 @@ export class SseTransport<C, T> implements Transport<C, T> {
       if (this.flagsListener) {
         this.eventSource.removeEventListener('flags', this.flagsListener);
       }
-      // Improvement #7: Pass the un-allocated direct named handler block down cleanly
-      this.eventSource.removeEventListener('heartbeat', this.handleHeartbeat);
-
+      if (this.quotaListener) {
+        this.eventSource.removeEventListener('quota_exceeded', this.quotaListener);
+      }
+      if (this.errorListener) {
+        this.eventSource.removeEventListener('error', this.errorListener);
+      }
+      this.eventSource.onerror = null;
       this.eventSource.close();
       this.eventSource = null;
     }
     this.connectionId = null;
     this.connectPromise = null;
-
-    // Improvement #3: Completely drop closure bindings to avoid memory leaks
+    this.connectResolve = null;
+    this.connectReject = null;
     this.connectionListener = undefined;
     this.flagsListener = undefined;
+    this.quotaListener = undefined;
+    this.errorListener = undefined;
+  }
+
+  private resolveEventSourceImpl(): any {
+    if (this.configOptions?.EventSourceImpl) {
+      return this.configOptions.EventSourceImpl;
+    }
+    if (typeof window !== 'undefined' && (window as any).EventSource) {
+      return (window as any).EventSource;
+    }
+    if (typeof globalThis !== 'undefined' && (globalThis as any).EventSource) {
+      return (globalThis as any).EventSource;
+    }
+    return null;
   }
 
   private async connect(): Promise<void> {
-    // Improvement #1: Resolve with the active in-flight connection promise layout if active
     if (this.connectPromise) {
       return this.connectPromise;
     }
 
     this.connectPromise = new Promise((resolve, reject) => {
-      const base64Context = btoa(JSON.stringify(this.context));
-      // 1. Extract environment variables natively
-      const sdkVersion = __SDK_VERSION__; // Replaced automatically by your rollup/vite build step
+      this.connectResolve = resolve;
+      this.connectReject = reject;
+      const sdkVersion = typeof __SDK_VERSION__ !== 'undefined' ? __SDK_VERSION__ : 'unknown';
       const platform = typeof window !== 'undefined' ? 'browser' : 'nodejs';
-
-      // 2. Append non-invasive telemetry parameters safely to the stream handshake URL
-      // Extract the optional wrapper framework details or fallback to 'native'
       const wrapperName = this.configOptions?.wrapper?.name || 'native-js';
       const wrapperVersion = this.configOptions?.wrapper?.version || 'none';
 
-      // Append the framework metrics securely to the streaming query string
-      const url = `${this.endpoint}/stream?` +
+      const url =
+        `${this.endpoint}/stream?` +
         `sessionId=${encodeURIComponent(this.sessionId)}&` +
-        `context=${encodeURIComponent(base64Context)}&` +
+        `context=${encodeContextQueryParam(this.context)}&` +
         `sdkVersion=${encodeURIComponent(sdkVersion)}&` +
         `platform=${encodeURIComponent(platform)}&` +
         `wrapperName=${encodeURIComponent(wrapperName)}&` +
         `wrapperVersion=${encodeURIComponent(wrapperVersion)}`;
 
-      let ChosenEventSource: any = null;
-
-      if (this.configOptions?.EventSourceImpl) {
-        // 1. User supplied an explicit implementation (ideal for Node.js)
-        ChosenEventSource = this.configOptions.EventSourceImpl;
-      } else if (typeof window !== 'undefined' && (window as any).EventSource) {
-        // 2. Fallback to native browser API if running inside a browser environment
-        ChosenEventSource = (window as any).EventSource;
-      } else if (typeof global !== 'undefined' && (global as any).EventSource) {
-        // 3. Fallback to global server attachments if available
-        ChosenEventSource = (global as any).EventSource;
-      }
-
+      const ChosenEventSource = this.resolveEventSourceImpl();
       if (!ChosenEventSource) {
         this.connectPromise = null;
+        this.connectReject = null;
         return reject(
           new Error(
             '[FlagmintSDK] EventSource implementation is missing. ' +
-            'If you are running inside a Node.js server environment, you must explicitly ' +
-            'pass an implementation class (e.g., from the "eventsource" npm package) ' +
-            'via the EventSourceImpl configuration option.'
+              'If you are running inside a Node.js server environment, you must explicitly ' +
+              'pass an implementation class (e.g., from the "eventsource" npm package) ' +
+              'via the EventSourceImpl configuration option.'
           )
         );
       }
-      this.eventSource = new ChosenEventSource(url);
 
-      // Improvement #8: Standardized naming choices ('Listener' instead of 'Handler')
+      this.eventSource = new ChosenEventSource(url);
       this.connectionListener = this.createConnectionListener(resolve, reject);
       this.flagsListener = this.createFlagsListener();
-      console.log(this.eventSource)
+      this.quotaListener = this.createQuotaListener();
+      this.errorListener = this.createStreamErrorListener();
+
       this.eventSource?.addEventListener('connected', this.connectionListener);
       this.eventSource?.addEventListener('flags', this.flagsListener);
-      this.eventSource?.addEventListener('heartbeat', this.handleHeartbeat);
-      if (this.eventSource) {
-        this.eventSource.onerror = (err) => {
-          logger.error('[SseTransport] Native network pipeline alert layer triggered.', err);
+      this.eventSource?.addEventListener('quota_exceeded', this.quotaListener);
+      this.eventSource?.addEventListener('error', this.errorListener);
 
-          // Improvement #6: Only reject the promise if network errors interrupt the initial connect sequence
-          if (this.connectPromise && !this.initialFlagsReceived) {
+      if (this.eventSource) {
+        this.eventSource.onerror = () => {
+          if (this.terminalClose) {
             this.cleanupEventSource();
-            reject(new Error('Initial SSE connection stream setup rejected by infrastructure gateway.'));
-            this.initialFlagsReject?.(new Error('Handshake failure.'));
-            this.resetInitialResolvers();
-            return
+            return;
           }
 
-          // 2. Force an active client-side reconnection loop with backoff
-          // If the stream was already alive and dropped later (e.g. server reloads), 
-          // do not let the browser give up. Force a structured retry cycle.
+          logger.error('[SseTransport] Native network pipeline alert layer triggered.');
+
+          if (this.connectPromise && !this.initialFlagsReceived) {
+            const err = new Error('Initial SSE connection stream setup rejected by infrastructure gateway.');
+            this.cleanupEventSource();
+            reject(err);
+            return;
+          }
+
           this.scheduleActiveReconnection();
         };
       }
@@ -286,15 +456,13 @@ export class SseTransport<C, T> implements Transport<C, T> {
     return this.connectPromise;
   }
 
-  // --- Listener Factory Mappings ---
-
   private scheduleActiveReconnection(): void {
-    // Clear any existing scheduled retries to prevent overlapping loops
+    if (this.terminalClose) return;
+
     if (this.reconnectTimeoutId) clearTimeout(this.reconnectTimeoutId);
 
-    // Calculate exponential backoff interval (caps at 15 seconds maximum)
     this.reconnectAttempts++;
-    const backoffDelay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), 15000);
+    const backoffDelay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), MAX_RECONNECT_DELAY_MS);
 
     logger.log(`[SseTransport] Disconnected. Scheduling retry #${this.reconnectAttempts} in ${backoffDelay}ms...`);
 
@@ -302,9 +470,6 @@ export class SseTransport<C, T> implements Transport<C, T> {
 
     this.reconnectTimeoutId = setTimeout(async () => {
       try {
-        // NOTE: In production, the client app should re-fetch a fresh token/sessionId 
-        // from ff authentication handler endpoint right here before calling connect() 
-        // so it avoids hitting the 401 token-already-deleted error!
         if (this.refreshTokenCallback) {
           logger.log('[SseTransport] Refreshing single-use token credentials before reconnection...');
           this.sessionId = await this.refreshTokenCallback();
@@ -313,7 +478,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
         await this.connect();
       } catch (err) {
         logger.warn('[SseTransport] Reconnection attempt failed. Waiting for next cycle.');
-        // Loop continues automatically because connect() failure will hit onerror again
+        this.scheduleActiveReconnection();
       }
     }, backoffDelay);
   }
@@ -321,13 +486,14 @@ export class SseTransport<C, T> implements Transport<C, T> {
   private createConnectionListener(resolve: () => void, reject: (err: any) => void) {
     return (event: MessageEvent) => {
       try {
-        const payload = JSON.parse(event.data);
+        const payload = parseEventData(event);
         this.connectionId = payload.connectionId;
         logger.log(`[SseTransport] Stream channel synchronized with remote identifier: ${this.connectionId}`);
 
         this.reconnectAttempts = 0;
+        this.connectResolve = null;
+        this.connectReject = null;
 
-        // Improvement #2: Pull handshake listener definitions immediately after successful setup
         if (this.eventSource && this.connectionListener) {
           this.eventSource.removeEventListener('connected', this.connectionListener);
           this.connectionListener = undefined;
@@ -344,35 +510,61 @@ export class SseTransport<C, T> implements Transport<C, T> {
   private createFlagsListener() {
     return (event: MessageEvent) => {
       try {
-        const payload = JSON.parse(event.data);
-        this.flags = payload.flags ?? {};
-
-        this.onFlagsUpdatedCallback?.(this.flags);
-
-        if (!this.initialFlagsReceived) {
-          this.initialFlagsReceived = true;
-          this.initialFlagsResolve?.();
-          // Improvement #4: Fully drop reference pointers together upon validation completion
-          this.resetInitialResolvers();
-        }
-
-        if (this.nextFlagsResolve) {
-          this.nextFlagsResolve();
-          this.nextFlagsResolve = null;
-        }
+        const payload = parseEventData(event);
+        this.applyFlags((payload.flags ?? {}) as Record<string, T>);
       } catch (err) {
         logger.warn('[SseTransport] Failed structural parsing on streaming data packet:', err);
       }
     };
   }
 
-  // Improvement #7: Clean, simplified direct functional binding
-  private handleHeartbeat = (): void => {
-    logger.log('[SseTransport] ♥ streaming link heartbeat verified.');
-  };
+  private createQuotaListener() {
+    return (event: MessageEvent) => {
+      const payload = parseEventData(event);
+      this.handleQuotaPayload(payload);
+    };
+  }
+
+  /**
+   * Named `error` events from FF-EU (`event: error`) after the stream is hijacked.
+   * Distinct from EventSource.onerror, which fires on network/connection failure.
+   */
+  private createStreamErrorListener() {
+    return (event: MessageEvent) => {
+      // Named SSE `event: error` from FF-EU is a MessageEvent with JSON data.
+      // EventSource also fires a generic `error` Event on connection drop — ignore those here.
+      if (typeof event.data !== 'string') return;
+
+      const payload = parseEventData(event);
+      const errorCode = typeof payload.error === 'string' ? payload.error : 'internal_error';
+      const err = createSdkError(`SSE stream error: ${errorCode}`, this.mapStreamErrorCode(errorCode));
+
+      const retryable = errorCode === 'session_id_missing' || errorCode === 'internal_error';
+      this.terminalClose = !retryable;
+      this.emitError(err, { rejectInit: !this.initialFlagsReceived });
+      this.cleanupEventSource();
+
+      if (retryable && this.initialFlagsReceived) {
+        this.terminalClose = false;
+        this.scheduleActiveReconnection();
+      }
+    };
+  }
+
+  private mapStreamErrorCode(errorCode: string): string {
+    switch (errorCode) {
+      case 'session_id_missing':
+      case 'invalid_api_key':
+      case 'subscription_inactive':
+        return 'ERR_AUTH';
+      case 'invalid_context':
+        return 'ERR_INVALID_CONTEXT';
+      default:
+        return 'ERR_INTERNAL';
+    }
+  }
 
   private resetInitialResolvers(): void {
-    // Improvement #4: Abstracted cleanup helper
     this.initialFlagsResolve = null;
     this.initialFlagsReject = null;
   }
