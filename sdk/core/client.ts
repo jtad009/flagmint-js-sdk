@@ -9,6 +9,7 @@ import { SseTransport } from './transports/SSETransport';
 import {
   ConnectionShareHub,
   isConnectionSharingAvailable,
+  type ConnectionShareOptions,
 } from '@/core/helpers/connectionShare';
 
 type TransportMode = 'auto' | 'long-polling' | 'sse';
@@ -61,6 +62,11 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
    * origin hosts untrusted documents that should not steer or read this stream.
    */
   shareConnection?: boolean;
+  /**
+   * Test/runtime hooks for the share hub (channel, storage, timers).
+   * Omit in production.
+   */
+  share?: ConnectionShareOptions;
 }
 
 const DEFAULT_CACHE_TTL = 24 * 60 * 60 * 1000;
@@ -284,11 +290,14 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    * @returns true when this document is a follower and should skip opening a stream.
    */
   private async joinConnectionShare(options: FlagClientOptions<C>): Promise<boolean> {
-    if (!this.shareConnection || !isConnectionSharingAvailable() || options.transport) {
+    if (!this.shareConnection || options.transport) {
+      return false;
+    }
+    if (!options.share && !isConnectionSharingAvailable()) {
       return false;
     }
 
-    this.shareHub = new ConnectionShareHub<C, T>(this.apiKey);
+    this.shareHub = new ConnectionShareHub<C, T>(this.apiKey, options.share);
     this.shareHub.onPromote(async () => {
       logger.log('[FlagClient] Share leader departed. Promoting this document to hold the stream.');
       await this.setupTransport(options);
@@ -510,7 +519,10 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
     if (this.transport && typeof this.transport.fetchFlags === 'function') {
       try {
-        const updatedFlags = await this.transport.fetchFlags(pendingContext);
+        const updatedFlags = await this.transport.fetchFlags(pendingContext, {
+          persist:
+            this.shareHub?.currentRole === 'follower' ? this.persistContext : true,
+        });
         this.updateFlags(updatedFlags);
       } catch (error) {
         logger.error('[FlagClient] Error updating flags after context change:', error);

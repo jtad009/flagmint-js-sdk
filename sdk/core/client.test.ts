@@ -39,6 +39,123 @@ function jsonResponse(status: number, body: unknown) {
   };
 }
 
+class MemoryChannel {
+  static buses = new Map<string, Set<MemoryChannel>>();
+  onmessage: ((event: { data: unknown }) => void) | null = null;
+
+  constructor(public name: string) {
+    if (!MemoryChannel.buses.has(name)) {
+      MemoryChannel.buses.set(name, new Set());
+    }
+    MemoryChannel.buses.get(name)!.add(this);
+  }
+
+  static reset() {
+    MemoryChannel.buses.clear();
+  }
+
+  postMessage(data: unknown) {
+    for (const channel of MemoryChannel.buses.get(this.name) ?? []) {
+      if (channel !== this) {
+        channel.onmessage?.({ data });
+      }
+    }
+  }
+
+  close() {
+    MemoryChannel.buses.get(this.name)?.delete(this);
+  }
+}
+
+class AutoMockEventSource {
+  static instances: AutoMockEventSource[] = [];
+  url: string;
+  closed = false;
+  onerror: ((ev?: unknown) => void) | null = null;
+  private listeners = new Map<string, Set<(event: MessageEvent) => void>>();
+
+  constructor(url: string) {
+    this.url = url;
+    AutoMockEventSource.instances.push(this);
+    setImmediate(() => {
+      if (this.closed) return;
+      this.emit('connected', { connectionId: 'conn-1' });
+      this.emit('flags', { flags: { boot: true } });
+    });
+  }
+
+  static reset() {
+    AutoMockEventSource.instances.forEach((instance) => instance.close());
+    AutoMockEventSource.instances = [];
+  }
+
+  addEventListener(type: string, listener: (event: MessageEvent) => void) {
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+    this.listeners.get(type)!.add(listener);
+  }
+
+  removeEventListener(type: string, listener: (event: MessageEvent) => void) {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  close() {
+    this.closed = true;
+  }
+
+  emit(type: string, data: unknown) {
+    const event = {
+      data: typeof data === 'string' ? data : JSON.stringify(data),
+    } as MessageEvent;
+    this.listeners.get(type)?.forEach((listener) => listener(event));
+  }
+}
+
+function memoryStorage() {
+  const store = new Map<string, string>();
+  return {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      store.set(key, value);
+    },
+    removeItem: (key: string) => {
+      store.delete(key);
+    },
+  };
+}
+
+function shareHooks() {
+  const timers: Array<{ id: number; handler: () => void }> = [];
+  let nextId = 1;
+  return {
+    storage: memoryStorage(),
+    now: () => 1_000,
+    channelFactory: (name: string) => new MemoryChannel(name),
+    setTimer: (handler: () => void) => {
+      const id = nextId++;
+      timers.push({ id, handler });
+      return id as unknown as ReturnType<typeof setInterval>;
+    },
+    clearTimer: (id: ReturnType<typeof setInterval>) => {
+      const index = timers.findIndex((timer) => timer.id === (id as unknown as number));
+      if (index >= 0) timers.splice(index, 1);
+    },
+    delay: async () => undefined,
+  };
+}
+
+function clientInternals(client: FlagClient<any, any>) {
+  return client as unknown as {
+    transport: {
+      context: Record<string, unknown>;
+      fetchFlags: (
+        context: Record<string, unknown>,
+        options?: { persist?: boolean }
+      ) => Promise<Record<string, unknown>>;
+    };
+    shareHub: { currentRole: 'leader' | 'follower' };
+  };
+}
+
 describe('FlagClient', () => {
   const originalFetch = global.fetch;
 
@@ -76,11 +193,11 @@ describe('FlagClient', () => {
     expect(transport.fetchFlagsCalls).toEqual([
       {
         context: { user: 'first', custom: { source: 'SDK' } },
-        options: undefined,
+        options: { persist: true },
       },
       {
         context: { user: 'second', custom: { source: 'SDK' } },
-        options: undefined,
+        options: { persist: true },
       },
     ]);
 
@@ -170,5 +287,129 @@ describe('FlagClient', () => {
     expect(client.getFlag('cached')).toBe(true);
     expect(saveFlags).not.toHaveBeenCalledWith('ff_test', {});
     client.destroy();
+  });
+
+  it('keeps persist true on a local transport when persistContext is false', async () => {
+    const transport = createMockTransport();
+    const client = new FlagClient({
+      apiKey: 'ff_test',
+      context: { user: { key: 'local' } },
+      enableFlagmint: true,
+      deferInitialization: true,
+      shareConnection: false,
+      enableOfflineCache: false,
+      persistContext: false,
+      transport,
+    });
+
+    await client.ready(50);
+    await client.updateContext({ user: { key: 'after-login' } });
+
+    expect(transport.fetchFlagsCalls).toEqual([
+      {
+        context: { user: { key: 'after-login' } },
+        options: { persist: true },
+      },
+    ]);
+
+    client.destroy();
+  });
+
+  describe('shared leader and follower persistContext', () => {
+    beforeEach(() => {
+      MemoryChannel.reset();
+      AutoMockEventSource.reset();
+    });
+
+    afterEach(() => {
+      AutoMockEventSource.reset();
+      MemoryChannel.reset();
+    });
+
+    it.each([true, false])(
+      'forwards persistContext %s from a follower updateContext onto the leader stream',
+      async (persistContext) => {
+        const persistCalls: Array<boolean | undefined> = [];
+        global.fetch = jest.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes('asl-handshake')) {
+            return jsonResponse(200, { data: { sessionId: 'sess-1' } });
+          }
+          if (url.includes('/context')) {
+            setImmediate(() => {
+              const es = AutoMockEventSource.instances.at(-1);
+              es?.emit('flags', { flags: { afterContext: true } });
+            });
+            return jsonResponse(202, { statusCode: 202 });
+          }
+          return jsonResponse(500, {});
+        }) as unknown as typeof fetch;
+
+        const share = shareHooks();
+        const apiKey = `ff_share_persist_${persistContext}`;
+        const noCache = {
+          loadFlags: () => null,
+          saveFlags: () => undefined,
+          loadContext: () => null,
+          saveContext: () => undefined,
+        };
+
+        const leader = new FlagClient({
+          apiKey,
+          context: { user: { key: 'leader' } },
+          enableFlagmint: true,
+          deferInitialization: true,
+          shareConnection: true,
+          share,
+          persistContext: false,
+          enableOfflineCache: false,
+          cacheAdapter: noCache,
+          transportMode: 'sse',
+          EventSourceImpl: AutoMockEventSource,
+        });
+        await leader.ready();
+
+        const leaderTransport = clientInternals(leader).transport;
+        const originalFetchFlags = leaderTransport.fetchFlags.bind(leaderTransport);
+        leaderTransport.fetchFlags = async (context, options) => {
+          persistCalls.push(options?.persist);
+          return originalFetchFlags(context, options);
+        };
+
+        expect(clientInternals(leader).shareHub.currentRole).toBe('leader');
+        expect(leaderTransport.context).toMatchObject({ user: { key: 'leader' } });
+
+        const follower = new FlagClient({
+          apiKey,
+          context: { user: { key: 'follower-boot' } },
+          enableFlagmint: true,
+          deferInitialization: true,
+          shareConnection: true,
+          share,
+          persistContext,
+          enableOfflineCache: false,
+          cacheAdapter: noCache,
+          transportMode: 'sse',
+          EventSourceImpl: AutoMockEventSource,
+        });
+        await follower.ready();
+
+        expect(clientInternals(follower).shareHub.currentRole).toBe('follower');
+
+        await follower.updateContext({ user: { key: 'from-follower' } });
+
+        expect(persistCalls).toEqual([persistContext]);
+        expect(JSON.parse((global.fetch as jest.Mock).mock.calls.at(-1)[1].body)).toMatchObject({
+          connectionId: 'conn-1',
+          context: { user: { key: 'from-follower' } },
+        });
+        expect(leaderTransport.context).toMatchObject({
+          user: { key: persistContext ? 'from-follower' : 'leader' },
+        });
+
+        follower.destroy();
+        leader.destroy();
+      }
+    );
   });
 });
