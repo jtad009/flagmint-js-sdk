@@ -103,12 +103,28 @@ describe('SseTransport', () => {
     transport.destroy();
   });
 
-  it('rejects init when the connected event has no connectionId', async () => {
+  it('rejects init when the connected event is not JSON', async () => {
     const transport = createTransport();
     const initPromise = transport.init();
     const es = MockEventSource.instances[0];
 
     es.emit('connected', 'not-json');
+
+    await expect(initPromise).rejects.toThrow(/connectionId/);
+    expect(es.closed).toBe(true);
+    await expect(transport.fetchFlags({ user: { key: 'u2' } })).rejects.toThrow(
+      /stream connection not active/
+    );
+
+    transport.destroy();
+  });
+
+  it('rejects init when the connected event is missing connectionId', async () => {
+    const transport = createTransport();
+    const initPromise = transport.init();
+    const es = MockEventSource.instances[0];
+
+    es.emit('connected', {});
 
     await expect(initPromise).rejects.toThrow(/connectionId/);
     expect(es.closed).toBe(true);
@@ -379,28 +395,32 @@ describe('SseTransport', () => {
     jest.useFakeTimers();
 
     let calls = 0;
-    (global.fetch as jest.Mock).mockImplementation((_url: string, init: { signal?: AbortSignal }) => {
-      calls += 1;
-      if (calls === 1) {
-        return new Promise((_resolve, reject) => {
-          const abort = () => {
-            const err = new Error('The operation was aborted.');
-            err.name = 'AbortError';
-            reject(err);
-          };
-          if (init.signal?.aborted) {
-            abort();
-            return;
-          }
-          init.signal?.addEventListener('abort', abort);
+    const bodies: Array<{ context?: { user?: { key?: string } } }> = [];
+    (global.fetch as jest.Mock).mockImplementation(
+      (_url: string, init: { signal?: AbortSignal; body?: string }) => {
+        calls += 1;
+        bodies.push(JSON.parse(String(init.body)));
+        if (calls === 1) {
+          return new Promise((_resolve, reject) => {
+            const abort = () => {
+              const err = new Error('The operation was aborted.');
+              err.name = 'AbortError';
+              reject(err);
+            };
+            if (init.signal?.aborted) {
+              abort();
+              return;
+            }
+            init.signal?.addEventListener('abort', abort);
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 202,
+          json: async () => ({ statusCode: 202 }),
         });
       }
-      return Promise.resolve({
-        ok: true,
-        status: 202,
-        json: async () => ({ statusCode: 202 }),
-      });
-    });
+    );
 
     const hung = transport.fetchFlags({ user: { key: 'hung' } });
     const later = transport.fetchFlags({ user: { key: 'later' } });
@@ -411,6 +431,9 @@ describe('SseTransport', () => {
     await Promise.resolve();
     es.emit('flags', { flags: { later: true } });
     await expect(later).resolves.toEqual({ later: true });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0].context?.user?.key).toBe('hung');
+    expect(bodies[1].context?.user?.key).toBe('later');
 
     transport.destroy();
   });

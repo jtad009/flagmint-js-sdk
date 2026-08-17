@@ -59,8 +59,7 @@ const client = new FlagClient({
     kind: 'user',
     user: {
       kind: 'user',
-      key: 'user-123',
-      email: 'user@example.com'
+      key: 'user-123'
     }
   },
   onError: (error) => {
@@ -73,7 +72,7 @@ await client.ready();
 const enabled = client.getFlag('new_dashboard', false);
 ```
 
-Same-origin iframes that use this API key share one SSE connection by default. Set `shareConnection: false` if two clients on the page must keep different evaluation contexts at the same time, or if the origin hosts untrusted documents that should not share that stream.
+Same-origin iframes that use this API key share one SSE connection by default **in browsers that provide `BroadcastChannel`**. Without it (older browsers, Node), each client opens its own stream. Set `shareConnection: false` if two clients on the page must keep different evaluation contexts at the same time, or if the origin hosts untrusted documents that should not share that stream.
 
 ## Node.js
 
@@ -87,8 +86,13 @@ npm install eventsource
 import { FlagClient } from 'flagmint-js-sdk';
 import EventSource from 'eventsource';
 
+const apiKey = process.env.FLAGMINT_API_KEY;
+if (!apiKey) {
+  throw new Error('FLAGMINT_API_KEY is required');
+}
+
 const client = new FlagClient({
-  apiKey: process.env.FLAGMINT_API_KEY,
+  apiKey,
   enableFlagmint: true,
   EventSourceImpl: EventSource,
   env: process.env.FLAGMINT_ENVIRONMENT || 'production',
@@ -108,7 +112,7 @@ After `ready()`:
 
 1. Optionally joins a same-origin share group (browser). Followers stop here and receive flags from the leader.
 2. `POST /auth/asl-handshake` with `X-API-Key` → single-use `sessionId`.
-3. Opens `GET /evaluator/v2/flags/stream?sessionId&context&sdkVersion&platform&wrapper*`.
+3. Opens `GET /evaluator/v2/flags/stream?sessionId&context&sdkVersion&platform&wrapper*`. The server contract requires `sessionId` and a base64 `context` in the query string. Treat those query parameters as sensitive: do not put secrets or PII in `context`, and redact `sessionId` and `context` from access logs, reverse-proxy logs, and telemetry.
 4. Server sends `connected` (connection id) then `flags` (evaluated map). Heartbeats are SSE comments (`: heartbeat`) and are not exposed by EventSource.
 5. Flags are stored in the cache adapter (localStorage in the browser by default).
 6. Later admin publishes are pushed as `flags` events on the same stream.
@@ -125,7 +129,7 @@ After `ready()`:
 |---|---|---|---|
 | `apiKey` | string | required | Environment API key |
 | `enableFlagmint` | boolean | `true` | Set `false` in local/dev to skip connecting (no handshake, no stream) |
-| `context` | object | `{}` | Initial evaluation context |
+| `context` | object | `{}` | Initial evaluation context. Do not put secrets or PII here — the stream URL serializes this object in the query string |
 | `transportMode` | `'auto' \| 'sse' \| 'long-polling'` | `'auto'` | `auto` tries SSE, then long-polling |
 | `EventSourceImpl` | EventSource | browser global | Required in Node |
 | `shareConnection` | boolean | `true` in browsers with `BroadcastChannel`, `false` in Node | One stream per API key across same-origin documents |
@@ -147,8 +151,8 @@ After `ready()`:
 # Transport modes
 
 ```ts
-transportMode: 'auto'           // SSE, then long-polling
-transportMode: 'sse'            // stream only (throws into onError / fallback cache if it fails)
+transportMode: 'auto'           // SSE, then long-polling if SSE init fails
+transportMode: 'sse'            // stream only — reports failures through onError; uses cached flags if any (no long-polling fallback)
 transportMode: 'long-polling'   // POST evaluate on an interval
 ```
 
@@ -164,10 +168,10 @@ Used when the same app is embedded twice on one origin (for example two WeSeeDo 
 - If the leader iframe unloads, it posts `bye` so another member can take over immediately. If the tab is killed without `pagehide`, followers wait for the lock TTL.
 
 ```ts
-// Default in the browser — one stream for this API key
+// Default in browsers with BroadcastChannel — one stream for this API key
 shareConnection: true
 
-// Two clients, two contexts, two streams
+// Two clients, two contexts, two streams — or no BroadcastChannel
 shareConnection: false
 ```
 
@@ -193,7 +197,7 @@ SSE `/context` changes **that connection’s** context. It is the right tool for
 
 # Errors and quota
 
-`ready()` always resolves. Use `onError`:
+`ready()` always resolves. Failures are reported through `onError`, never thrown from `ready()`. `transportMode: 'sse'` does not fall back to long-polling; it stays on the last cached snapshot (if any). `auto` tries SSE, then long-polling.
 
 | `error.code` | Meaning |
 |---|---|

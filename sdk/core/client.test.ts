@@ -2,18 +2,24 @@ import { FlagClient } from './client';
 import type { Transport } from './transports/Transport';
 
 function createMockTransport() {
-  const fetchFlagsCalls: Array<Record<string, unknown>> = [];
+  const fetchFlagsCalls: Array<{
+    context: Record<string, unknown>;
+    options?: { persist?: boolean };
+  }> = [];
   let flagsCallback: ((flags: Record<string, unknown>) => void) | undefined;
 
   const transport: Transport<Record<string, unknown>, unknown> & {
-    fetchFlagsCalls: Array<Record<string, unknown>>;
+    fetchFlagsCalls: Array<{
+      context: Record<string, unknown>;
+      options?: { persist?: boolean };
+    }>;
   } = {
     fetchFlagsCalls,
     async init() {
       flagsCallback?.({ boot: true });
     },
-    async fetchFlags(context) {
-      fetchFlagsCalls.push(context);
+    async fetchFlags(context, options) {
+      fetchFlagsCalls.push({ context, options });
       return { from: (context as { user?: unknown }).user };
     },
     destroy() {},
@@ -68,8 +74,14 @@ describe('FlagClient', () => {
     await Promise.all([first, second]);
 
     expect(transport.fetchFlagsCalls).toEqual([
-      { user: 'first', custom: { source: 'SDK' } },
-      { user: 'second', custom: { source: 'SDK' } },
+      {
+        context: { user: 'first', custom: { source: 'SDK' } },
+        options: undefined,
+      },
+      {
+        context: { user: 'second', custom: { source: 'SDK' } },
+        options: undefined,
+      },
     ]);
 
     client.destroy();

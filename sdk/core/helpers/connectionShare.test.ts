@@ -136,15 +136,25 @@ describe('ConnectionShareHub', () => {
 
     await leader.join();
     await follower.join();
-    leader.setLeaderContextHandler(async (context) => {
+    const receivedOptions: Array<{ persist?: boolean } | undefined> = [];
+    leader.setLeaderContextHandler(async (context, fetchOptions) => {
       expect(context).toEqual({ site: 'abc' });
+      receivedOptions.push(fetchOptions);
       return { allow_scheduling_by_participant: true };
     });
 
     const transport = follower.createFollowerTransport();
-    await expect(transport.fetchFlags({ site: 'abc' })).resolves.toEqual({
+    await expect(
+      transport.fetchFlags({ site: 'abc' }, { persist: false })
+    ).resolves.toEqual({
       allow_scheduling_by_participant: true,
     });
+    await expect(
+      transport.fetchFlags({ site: 'abc' }, { persist: true })
+    ).resolves.toEqual({
+      allow_scheduling_by_participant: true,
+    });
+    expect(receivedOptions).toEqual([{ persist: false }, { persist: true }]);
 
     leader.destroy();
     follower.destroy();
@@ -197,5 +207,38 @@ describe('ConnectionShareHub', () => {
 
     first.destroy();
     second.destroy();
+  });
+
+  it('retries takeover after a failed promotion', async () => {
+    const options = shareOptions();
+    const leader = new ConnectionShareHub('ff_test', options);
+    const follower = new ConnectionShareHub('ff_test', options);
+    let attempts = 0;
+    follower.onPromote(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('setup failed');
+    });
+
+    await leader.join();
+    await follower.join();
+    leader.destroy();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(follower.currentRole).toBe('follower');
+    expect(attempts).toBe(1);
+
+    options.tickTimers();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(attempts).toBe(2);
+    expect(follower.currentRole).toBe('leader');
+
+    follower.destroy();
   });
 });

@@ -60,7 +60,7 @@ type ShareMessage<C = unknown, T = unknown> =
   | { type: 'alive'; memberId: string }
   | { type: 'flags'; memberId: string; flags: Record<string, T> }
   | { type: 'error'; memberId: string; message: string; code?: string; retryAfter?: number }
-  | { type: 'context-request'; memberId: string; requestId: string; context: C }
+  | { type: 'context-request'; memberId: string; requestId: string; context: C; persist?: boolean }
   | { type: 'context-result'; requestId: string; flags?: Record<string, T>; error?: { message: string; code?: string } }
   | { type: 'bye'; memberId: string };
 
@@ -146,7 +146,10 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     reject: (err: Error) => void;
   }>();
   private onPromoteCallback?: () => void | Promise<void>;
-  private leaderContextHandler?: (context: C) => Promise<Record<string, T>>;
+  private leaderContextHandler?: (
+    context: C,
+    options?: { persist?: boolean }
+  ) => Promise<Record<string, T>>;
   private followerFlagsCallback?: (flags: Record<string, T>) => void;
   private followerErrorCallback?: (error: Error) => void;
   private readonly now: () => number;
@@ -227,7 +230,9 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
    * sends `context-request`. The context is whatever that same-origin
    * document posted; the leader does not authenticate the sender beyond origin.
    */
-  setLeaderContextHandler(handler: (context: C) => Promise<Record<string, T>>): void {
+  setLeaderContextHandler(
+    handler: (context: C, options?: { persist?: boolean }) => Promise<Record<string, T>>
+  ): void {
     this.leaderContextHandler = handler;
   }
 
@@ -264,7 +269,8 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
         const flags = await this.waitForFlags();
         this.followerFlagsCallback?.(flags);
       },
-      fetchFlags: (context: C) => this.requestContextUpdate(context),
+      fetchFlags: (context: C, options?: { persist?: boolean }) =>
+        this.requestContextUpdate(context, options),
       destroy: () => undefined,
       onFlagsUpdated: (callback) => {
         this.followerFlagsCallback = callback;
@@ -362,6 +368,9 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
       logger.warn('[ConnectionShare] Follower failed to promote to leader.', err);
       this.releaseLock();
       this.role = 'follower';
+      if (this.heartbeatId) this.clearTimer(this.heartbeatId);
+      this.heartbeatId = null;
+      this.watchId = this.setTimer(() => void this.maybeTakeover(), HEARTBEAT_MS);
     }
   }
 
@@ -443,7 +452,9 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
       return;
     }
     try {
-      const flags = await this.leaderContextHandler(message.context);
+      const flags = await this.leaderContextHandler(message.context, {
+        persist: message.persist,
+      });
       this.broadcastFlags(flags);
       this.channel?.postMessage({
         type: 'context-result',
@@ -489,12 +500,15 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
    * Untrusted same-origin frames must not share a connection with a trusted
    * leader — set `shareConnection: false` on those clients.
    */
-  private requestContextUpdate(context: C): Promise<Record<string, T>> {
+  private requestContextUpdate(
+    context: C,
+    options?: { persist?: boolean }
+  ): Promise<Record<string, T>> {
     if (this.role === 'leader') {
       if (!this.leaderContextHandler) {
         return Promise.reject(new Error('Leader has no active transport for context updates.'));
       }
-      return this.leaderContextHandler(context);
+      return this.leaderContextHandler(context, options);
     }
 
     const requestId = randomMemberId();
@@ -520,6 +534,7 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
         memberId: this.memberId,
         requestId,
         context,
+        persist: options?.persist,
       });
     });
   }

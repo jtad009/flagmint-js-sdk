@@ -311,12 +311,14 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   }
 
   private attachShareLeader(): void {
-    this.shareHub?.setLeaderContextHandler(async (context) => {
+    this.shareHub?.setLeaderContextHandler(async (context, options) => {
       const mergedContext = { ...this.context, ...context } as C;
       if (!this.transport || typeof this.transport.fetchFlags !== 'function') {
         return this.flags as Record<string, T>;
       }
-      return this.transport.fetchFlags(mergedContext, { persist: false });
+      return this.transport.fetchFlags(mergedContext, {
+        persist: options?.persist === true,
+      });
     });
   }
 
