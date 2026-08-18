@@ -199,6 +199,20 @@ describe('SseTransport', () => {
     transport.destroy();
   });
 
+  it('forwards the analytics map from a flags packet', async () => {
+    const { transport, es } = await openStream({ foo: true });
+    const received: Array<Record<string, boolean>> = [];
+    transport.onAnalyticsUpdated((analytics) => received.push(analytics));
+
+    es.emit('flags', {
+      flags: { foo: false },
+      analytics: { foo: true, quiet_flag: false },
+    });
+
+    expect(received).toEqual([{ foo: true, quiet_flag: false }]);
+    transport.destroy();
+  });
+
   it('POSTs context with x-api-key and waits for flags on the stream, not the HTTP body', async () => {
     const { transport, es } = await openStream({ foo: true });
     const received: Array<Record<string, unknown>> = [];

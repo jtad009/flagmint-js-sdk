@@ -11,6 +11,15 @@ import {
   isConnectionSharingAvailable,
   type ConnectionShareOptions,
 } from '@/core/helpers/connectionShare';
+import {
+  EVENT_FLUSH_MS,
+  MAX_EVENT_BATCH,
+  eventsUrlFromRestEndpoint,
+  extraFromError,
+  shouldReportApplicationEvent,
+  userKeyFromContext,
+  type ApplicationEvent,
+} from '@/core/helpers/applicationEvents';
 
 type TransportMode = 'auto' | 'long-polling' | 'sse';
 
@@ -118,8 +127,13 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   private cacheTTL: number;
   private transport!: Transport<C, T>;
   private restEndpoint: string;
+  private eventsEndpoint: string;
   private aslHandshakeUrl: string;
   private sseEndpoint: string;
+  private eventQueue: ApplicationEvent[] = [];
+  private eventFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** null = server has not sent a map yet; send and let ingest drop. */
+  private analyticsByFlag: Record<string, boolean> | null = null;
 
   private readyPromise!: Promise<void>;
   private resolveReady!: () => void;
@@ -154,6 +168,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     this.onError = options.onError;
     const defaultEndpoints = getDefaultEndpoints(options.env);
     this.restEndpoint = options.restEndpoint ?? defaultEndpoints.rest;
+    this.eventsEndpoint = eventsUrlFromRestEndpoint(this.restEndpoint);
     this.sseEndpoint = options.sseEndpoint ?? defaultEndpoints.sse;
     this.aslHandshakeUrl = options.handshakeEndpoint ?? defaultEndpoints.handshakeURL;
     this.cacheAdapter = options.cacheAdapter ?? {
@@ -275,6 +290,11 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       transport.onFlagsUpdated((updatedFlags) => {
         logger.log('[FlagClient] Flags updated via transport line stream notification:', updatedFlags);
         this.updateFlags(updatedFlags);
+      });
+    }
+    if (typeof transport.onAnalyticsUpdated === 'function') {
+      transport.onAnalyticsUpdated((analytics) => {
+        this.updateAnalytics(analytics);
       });
     }
     if (typeof transport.onError === 'function') {
@@ -503,6 +523,48 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   }
 
   /**
+   * Report an application error that happened after this flag was served.
+   * Fire-and-forget: events are batched and never throw.
+   * No-ops when Analytics Tracking is off for that flag.
+   */
+  trackError(flagKey: string, error?: unknown, extra?: Record<string, unknown>): void {
+    this.queueApplicationEvent({
+      flagKey,
+      kind: 'error',
+      variationValue: this.flags[flagKey as keyof FeatureFlags<T>],
+      userKey: userKeyFromContext(this.context as Record<string, unknown>),
+      timestamp: new Date().toISOString(),
+      extra: extraFromError(error, extra),
+    });
+  }
+
+  /**
+   * Report a custom metric event attributed to the currently served variation.
+   * Fire-and-forget: events are batched and never throw.
+   * No-ops when Analytics Tracking is off for that flag.
+   */
+  track(flagKey: string, eventName: string, extra?: Record<string, unknown>): void {
+    this.queueApplicationEvent({
+      flagKey,
+      kind: 'custom',
+      eventName,
+      variationValue: this.flags[flagKey as keyof FeatureFlags<T>],
+      userKey: userKeyFromContext(this.context as Record<string, unknown>),
+      timestamp: new Date().toISOString(),
+      extra,
+    });
+  }
+
+  /**
+   * Whether Analytics Tracking is on for this flag in the last streamed payload.
+   * `undefined` means the server has not sent a map yet (older API / long-polling).
+   */
+  isAnalyticsEnabled(flagKey: string): boolean | undefined {
+    if (this.analyticsByFlag === null) return undefined;
+    return this.analyticsByFlag[flagKey] === true;
+  }
+
+  /**
    * Update the evaluation context.
    */
   async updateContext(context: C): Promise<void> {
@@ -538,6 +600,11 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     if (this.refreshIntervalId) {
       clearInterval(this.refreshIntervalId);
     }
+    if (this.eventFlushTimer) {
+      clearTimeout(this.eventFlushTimer);
+      this.eventFlushTimer = null;
+    }
+    void this.flushApplicationEvents();
     // Clear all subscribers
     this.subscribers.clear();
     if (this.transport) {
@@ -654,6 +721,54 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
       logger.log('[FlagClient] 🔍 Subscribe callback registered');
     });
+  }
+
+  private updateAnalytics(analytics: Record<string, boolean>): void {
+    this.analyticsByFlag = { ...analytics };
+  }
+
+  private queueApplicationEvent(event: ApplicationEvent): void {
+    if (this.previewMode || this.enableFlagmint === false) return;
+    if (!shouldReportApplicationEvent(this.analyticsByFlag, event.flagKey)) return;
+
+    this.eventQueue.push(event);
+    if (this.eventQueue.length >= MAX_EVENT_BATCH) {
+      void this.flushApplicationEvents();
+      return;
+    }
+    if (!this.eventFlushTimer) {
+      this.eventFlushTimer = setTimeout(() => {
+        this.eventFlushTimer = null;
+        void this.flushApplicationEvents();
+      }, EVENT_FLUSH_MS);
+    }
+  }
+
+  private async flushApplicationEvents(): Promise<void> {
+    if (this.eventFlushTimer) {
+      clearTimeout(this.eventFlushTimer);
+      this.eventFlushTimer = null;
+    }
+    if (this.eventQueue.length === 0) return;
+
+    const batch = this.eventQueue.splice(0, MAX_EVENT_BATCH);
+    try {
+      await fetch(this.eventsEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': this.apiKey,
+        },
+        body: JSON.stringify({ events: batch }),
+        keepalive: true,
+      });
+    } catch (err) {
+      logger.error('[FlagClient] Failed to send application events:', err);
+    }
+
+    if (this.eventQueue.length > 0) {
+      void this.flushApplicationEvents();
+    }
   }
 
   /**

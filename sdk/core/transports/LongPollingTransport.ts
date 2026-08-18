@@ -16,6 +16,7 @@ export class LongPollingTransport<C, T> implements Transport<C, T> {
   private backoffMultiplier: number;
   private pollTimeoutId: NodeJS.Timeout | number | null = null;
   private onUpdateCallback?: (flags: Record<string, T>) => void;
+  private onAnalyticsUpdatedCallback?: (analytics: Record<string, boolean>) => void;
   private currentContext: C;
   private currentFlags: Record<string, T> = {};
   
@@ -140,11 +141,18 @@ export class LongPollingTransport<C, T> implements Transport<C, T> {
     }
 
     const data = await res.json();
+    if (data && typeof data === 'object' && !Array.isArray(data) && data.analytics && typeof data.analytics === 'object') {
+      this.onAnalyticsUpdatedCallback?.(data.analytics as Record<string, boolean>);
+    }
     return data.data as Record<string, T>;
   }
 
   onFlagsUpdated(callback: (flags: Record<string, T>) => void): void {
     this.onUpdateCallback = callback;
+  }
+
+  onAnalyticsUpdated(callback: (analytics: Record<string, boolean>) => void): void {
+    this.onAnalyticsUpdatedCallback = callback;
   }
 
   destroy(): void {
@@ -157,5 +165,6 @@ export class LongPollingTransport<C, T> implements Transport<C, T> {
     }
     
     this.onUpdateCallback = undefined;
+    this.onAnalyticsUpdatedCallback = undefined;
   }
 }

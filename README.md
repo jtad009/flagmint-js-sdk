@@ -195,6 +195,52 @@ SSE `/context` changes **that connection’s** context. It is the right tool for
 
 ---
 
+# Tracking application errors
+
+`getFlag()` tells you what was served. `trackError()` tells Flagmint whether that variation hurt the user. Errors are attributed to the **currently served value** of the flag, batched, and posted to `POST /evaluator/events`. The call never throws.
+
+Analytics must be enabled on the flag in the dashboard. The SDK skips `trackError` / `track` locally once the SSE `flags` packet includes `analytics` for that key. Older servers without the map still accept the POST and drop it at ingest.
+
+```ts
+const checkoutOn = client.getFlag('checkout_redesign', false);
+
+try {
+  await submitPayment();
+} catch (error) {
+  client.trackError('checkout_redesign', error, { step: 'payment' });
+  throw error;
+}
+```
+
+`track(flagKey, eventName)` uses the same pipe for custom metrics (conversions, etc.). Only `kind: 'error'` is counted in app error rate today.
+
+### Manual verification
+
+The Flagmint dashboard evaluates its own flags with `flagmint-react-sdk` (`useFlag('homepage_variant')`). Boom that path, don't curl:
+
+1. Enable Analytics Tracking on `homepage_variant`.
+2. Run FF-EU on `:3000` and the dashboard (`npm run dev` in `flagmint`, port **5200**).
+3. Open [http://localhost:5200/?flagmint_boom=1](http://localhost:5200/?flagmint_boom=1).
+
+The homepage reads the served variant, then `trackError('homepage_variant', …)` (or POSTs `/evaluator/events` if this app still has js-sdk 1.x). Expect a **Flag error sent** toast. Metrics **App error rate** moves after the 5-minute flush.
+
+Other SDK flags: `?flagmint_boom=show_google_login` on `/login`. Production ignores the query param.
+
+```tsx
+const enabled = useFlag('checkout_redesign', false);
+const { client } = useFlagmint();
+try {
+  await submitPayment();
+} catch (error) {
+  client?.trackError?.('checkout_redesign', error);
+  throw error;
+}
+```
+
+Full notes: `FF-EU/documentation/APPLICATION_ERROR_TRACKING.md`.
+
+---
+
 # Errors and quota
 
 `ready()` always resolves. Failures are reported through `onError`, never thrown from `ready()`. `transportMode: 'sse'` does not fall back to long-polling; it stays on the last cached snapshot (if any). `auto` tries SSE, then long-polling.

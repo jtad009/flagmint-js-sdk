@@ -7,12 +7,14 @@ function createMockTransport() {
     options?: { persist?: boolean };
   }> = [];
   let flagsCallback: ((flags: Record<string, unknown>) => void) | undefined;
+  let analyticsCallback: ((analytics: Record<string, boolean>) => void) | undefined;
 
   const transport: Transport<Record<string, unknown>, unknown> & {
     fetchFlagsCalls: Array<{
       context: Record<string, unknown>;
       options?: { persist?: boolean };
     }>;
+    emitAnalytics: (analytics: Record<string, boolean>) => void;
   } = {
     fetchFlagsCalls,
     async init() {
@@ -25,6 +27,12 @@ function createMockTransport() {
     destroy() {},
     onFlagsUpdated(callback) {
       flagsCallback = callback;
+    },
+    onAnalyticsUpdated(callback) {
+      analyticsCallback = callback;
+    },
+    emitAnalytics(analytics) {
+      analyticsCallback?.(analytics);
     },
   };
 
@@ -411,5 +419,115 @@ describe('FlagClient', () => {
         leader.destroy();
       }
     );
+  });
+
+  describe('trackError', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('batches application errors onto POST /evaluator/events', async () => {
+      global.fetch = jest.fn().mockResolvedValue(jsonResponse(202, { statusCode: 202 }));
+      const transport = createMockTransport();
+      const client = new FlagClient({
+        apiKey: 'ff_test',
+        context: { user: { key: 'user-123' } },
+        enableFlagmint: true,
+        deferInitialization: true,
+        shareConnection: false,
+        enableOfflineCache: true,
+        persistContext: false,
+        transport,
+        restEndpoint: 'http://localhost:3000/evaluator/evaluate',
+        cacheAdapter: {
+          loadFlags: () => ({ checkout_redesign: true }),
+          saveFlags: () => undefined,
+          loadContext: () => null,
+          saveContext: () => undefined,
+        },
+      });
+      await client.ready();
+
+      client.trackError('boot', new Error('payment failed'), { step: 'pay' });
+      expect(global.fetch).not.toHaveBeenCalled();
+
+      await jest.advanceTimersByTimeAsync(2000);
+
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+      const [url, init] = (global.fetch as jest.Mock).mock.calls[0];
+      expect(url).toBe('http://localhost:3000/evaluator/events');
+      expect(init.method).toBe('POST');
+      expect(init.headers['X-API-Key']).toBe('ff_test');
+      expect(JSON.parse(init.body)).toMatchObject({
+        events: [
+          {
+            flagKey: 'boot',
+            kind: 'error',
+            variationValue: true,
+            userKey: 'user-123',
+            extra: { message: 'payment failed', name: 'Error', step: 'pay' },
+          },
+        ],
+      });
+      client.destroy();
+    });
+
+    it('does not send events in preview mode', async () => {
+      global.fetch = jest.fn();
+      const client = new FlagClient({
+        apiKey: 'ff_test',
+        enableFlagmint: true,
+        previewMode: true,
+        rawFlags: {
+          checkout_redesign: { key: 'checkout_redesign', value: true, type: 'boolean' } as any,
+        },
+        shareConnection: false,
+      });
+
+      client.trackError('checkout_redesign', new Error('boom'));
+      await jest.advanceTimersByTimeAsync(2000);
+      expect(global.fetch).not.toHaveBeenCalled();
+      client.destroy();
+    });
+
+    it('does not send events when analytics is off for that flag', async () => {
+      global.fetch = jest.fn().mockResolvedValue(jsonResponse(202, { statusCode: 202 }));
+      const transport = createMockTransport();
+      const client = new FlagClient({
+        apiKey: 'ff_test',
+        context: { user: { key: 'user-123' } },
+        enableFlagmint: true,
+        deferInitialization: true,
+        shareConnection: false,
+        enableOfflineCache: true,
+        persistContext: false,
+        transport,
+        restEndpoint: 'http://localhost:3000/evaluator/evaluate',
+        cacheAdapter: {
+          loadFlags: () => ({ boot: true, quiet_flag: true }),
+          saveFlags: () => undefined,
+          loadContext: () => null,
+          saveContext: () => undefined,
+        },
+      });
+      await client.ready();
+      transport.emitAnalytics({ boot: true, quiet_flag: false });
+
+      client.trackError('quiet_flag', new Error('ignored'));
+      await jest.advanceTimersByTimeAsync(2000);
+      expect(global.fetch).not.toHaveBeenCalled();
+
+      client.trackError('boot', new Error('counted'));
+      await jest.advanceTimersByTimeAsync(2000);
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+      expect(JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body)).toMatchObject({
+        events: [{ flagKey: 'boot', kind: 'error' }],
+      });
+      client.destroy();
+    });
   });
 });

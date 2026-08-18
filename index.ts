@@ -9,6 +9,7 @@ export type { FlagClientOptions } from './sdk/core/client';
 
 // // Cache adapter types (sync + async)
 export type { CacheAdapter, FeatureFlags } from './sdk/core/helpers/types';
+export type { ApplicationEvent, ApplicationEventKind } from './sdk/core/helpers/applicationEvents';
 export * as syncCache from './sdk/core/helpers/cacheHelper';           // sync: loadCachedFlags, saveCachedFlags, etc.
 export * as asyncCache from './sdk/core/helpers/cacheHelper.async';     // async: loadCachedFlags, saveCachedFlags, etc.
 

@@ -87,6 +87,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
   private context: C;
   private connectionId: string | null = null;
   private onFlagsUpdatedCallback?: (flags: Record<string, T>) => void;
+  private onAnalyticsUpdatedCallback?: (analytics: Record<string, boolean>) => void;
   private onErrorCallback?: (error: Error) => void;
 
   private initialFlagsReceived = false;
@@ -179,6 +180,10 @@ export class SseTransport<C, T> implements Transport<C, T> {
     this.onFlagsUpdatedCallback = callback;
   }
 
+  onAnalyticsUpdated(callback: (analytics: Record<string, boolean>) => void): void {
+    this.onAnalyticsUpdatedCallback = callback;
+  }
+
   onError(callback: (error: Error) => void): void {
     this.onErrorCallback = callback;
   }
@@ -189,6 +194,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
     this.cleanupEventSource();
     this.flags = {};
     this.onFlagsUpdatedCallback = undefined;
+    this.onAnalyticsUpdatedCallback = undefined;
     this.onErrorCallback = undefined;
     this.resetInitialResolvers();
     this.nextFlagsResolve = null;
@@ -544,6 +550,9 @@ export class SseTransport<C, T> implements Transport<C, T> {
           return;
         }
         this.applyFlags(payload.flags as Record<string, T>);
+        if (isPlainObject(payload.analytics)) {
+          this.onAnalyticsUpdatedCallback?.(payload.analytics as Record<string, boolean>);
+        }
       } catch (err) {
         logger.warn('[SseTransport] Failed structural parsing on streaming data packet:', err);
       }
