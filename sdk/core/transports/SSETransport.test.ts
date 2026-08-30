@@ -391,6 +391,34 @@ describe('SseTransport', () => {
     transport.destroy();
   });
 
+  it('reconnects with the last sent context when persist is false', async () => {
+    const { transport, es } = await openStream({ foo: true });
+
+    (global.fetch as jest.Mock).mockImplementation(async () => {
+      setImmediate(() => es.emit('flags', { flags: { transient: true } }));
+      return {
+        ok: true,
+        status: 202,
+        json: async () => ({ statusCode: 202 }),
+      };
+    });
+
+    await transport.fetchFlags({ user: { key: 'transient' } }, { persist: false });
+
+    jest.useFakeTimers();
+    es.onerror?.();
+    await jest.advanceTimersByTimeAsync(2000);
+
+    const es2 = MockEventSource.instances.at(-1)!;
+    expect(decodeContextFromUrl(es2.url)).toMatchObject({
+      user: { key: 'transient' },
+      custom: { source: 'SDK' },
+    });
+
+    jest.useRealTimers();
+    transport.destroy();
+  });
+
   it('reconnects after a dead connection (404) on context POST', async () => {
     const { transport } = await openStream({ foo: true });
 

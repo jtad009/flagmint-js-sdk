@@ -213,6 +213,48 @@ describe('FlagClient', () => {
     client.destroy();
   });
 
+  it('ignores stale fetchFlags results when a newer updateContext finishes first', async () => {
+    const fetchFlagsCalls: Array<{ context: Record<string, unknown> }> = [];
+    const pendingResolvers: Array<(flags: Record<string, unknown>) => void> = [];
+    const transport: Transport<Record<string, unknown>, unknown> = {
+      async init() {},
+      async fetchFlags(context) {
+        fetchFlagsCalls.push({ context });
+        return new Promise((resolve) => {
+          pendingResolvers.push(resolve);
+        });
+      },
+      destroy() {},
+      onFlagsUpdated() {},
+      onAnalyticsUpdated() {},
+    };
+
+    const client = new FlagClient({
+      apiKey: 'ff_test',
+      context: { user: 'base', custom: { source: 'SDK' } },
+      enableFlagmint: true,
+      deferInitialization: true,
+      shareConnection: false,
+      enableOfflineCache: false,
+      transport,
+    });
+
+    await client.ready(50);
+
+    const first = client.updateContext({ user: 'first' });
+    const second = client.updateContext({ user: 'second' });
+
+    pendingResolvers[1]({ from: 'second' });
+    await second;
+    pendingResolvers[0]({ from: 'first' });
+    await first;
+
+    expect(client.getFlags()).toEqual({ from: 'second' });
+    expect(fetchFlagsCalls).toHaveLength(2);
+
+    client.destroy();
+  });
+
   it('surfaces handshake 401 as ERR_AUTH on the error object', async () => {
     const errors: Error[] = [];
     global.fetch = jest.fn().mockResolvedValue(jsonResponse(401, {}));

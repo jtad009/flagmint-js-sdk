@@ -142,6 +142,10 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
   private closed = false;
   private latestFlags: Record<string, T> | null = null;
   private flagsWaiters: Array<(flags: Record<string, T>) => void> = [];
+  private flagsTimeouts: Array<{
+    timeoutId: ReturnType<typeof setTimeout>;
+    reject: (err: Error) => void;
+  }> = [];
   private contextWaiters = new Map<string, {
     resolve: (flags: Record<string, T>) => void;
     reject: (err: Error) => void;
@@ -308,6 +312,10 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
       setTimeout(() => channel.close(), 0);
     }
     this.flagsWaiters = [];
+    this.flagsTimeouts.splice(0).forEach(({ timeoutId, reject }) => {
+      clearTimeout(timeoutId);
+      reject(new Error('Connection share hub closed.'));
+    });
     this.contextWaiters.forEach(({ reject }) => reject(new Error('Connection share hub closed.')));
     this.contextWaiters.clear();
   }
@@ -423,6 +431,7 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
         break;
       case 'error':
         if (this.role === 'leader') return;
+        if (typeof message.message !== 'string' || message.message.length === 0) return;
         {
           const err = new Error(message.message);
           Object.assign(err, { code: message.code, retryAfter: message.retryAfter });
@@ -501,18 +510,22 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
    */
   private waitForFlags(): Promise<Record<string, T>> {
     if (this.latestFlags) return Promise.resolve(this.latestFlags);
+    if (this.closed) return Promise.reject(new Error('Connection share hub closed.'));
 
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
         this.flagsWaiters = this.flagsWaiters.filter((waiter) => waiter !== onFlags);
+        this.flagsTimeouts = this.flagsTimeouts.filter((entry) => entry.timeoutId !== timeoutId);
         reject(new Error('Timed out waiting for shared flag snapshot from the leader iframe.'));
       }, FOLLOWER_WAIT_MS);
 
       const onFlags = (flags: Record<string, T>) => {
         clearTimeout(timeoutId);
+        this.flagsTimeouts = this.flagsTimeouts.filter((entry) => entry.timeoutId !== timeoutId);
         resolve(flags);
       };
       this.flagsWaiters.push(onFlags);
+      this.flagsTimeouts.push({ timeoutId, reject });
     });
   }
 

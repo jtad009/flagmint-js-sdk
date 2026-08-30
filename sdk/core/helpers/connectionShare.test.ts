@@ -243,6 +243,45 @@ describe('ConnectionShareHub', () => {
     second.destroy();
   });
 
+  it('ignores malformed error packets from the share channel', async () => {
+    const options = shareOptions();
+    const leader = new ConnectionShareHub('ff_test', options);
+    const follower = new ConnectionShareHub('ff_test', options);
+    const errors: Error[] = [];
+
+    await leader.join();
+    leader.broadcastFlags({ featureA: true });
+    await follower.join();
+
+    const transport = follower.createFollowerTransport();
+    transport.onError?.((err) => errors.push(err));
+    await transport.init();
+
+    const spy = new MemoryChannel('flagmint-share:ff_test');
+    spy.postMessage({ type: 'error', memberId: 'evil' });
+
+    expect(errors).toHaveLength(0);
+
+    leader.destroy();
+    follower.destroy();
+  });
+
+  it('rejects pending flag waiters when destroy() runs', async () => {
+    jest.useFakeTimers();
+    const options = shareOptions();
+    const follower = new ConnectionShareHub('ff_test', options);
+
+    await follower.join();
+    const transport = follower.createFollowerTransport();
+    const initPromise = transport.init();
+
+    follower.destroy();
+    await expect(initPromise).rejects.toThrow('Connection share hub closed.');
+
+    jest.advanceTimersByTime(6000);
+    jest.useRealTimers();
+  });
+
   it('retries takeover after a failed promotion', async () => {
     const options = shareOptions();
     const leader = new ConnectionShareHub('ff_test', options);
