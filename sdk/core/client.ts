@@ -11,6 +11,7 @@ import {
   isConnectionSharingAvailable,
   type ConnectionShareOptions,
 } from '@/core/helpers/connectionShare';
+import { toJsonCloneable } from '@/core/helpers/jsonCloneable';
 import {
   EVENT_FLUSH_MS,
   MAX_EVENT_BATCH,
@@ -178,7 +179,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       saveContext: syncCache.saveCachedContext
     };
 
-    this.context = (options.context || ({} as C));
+    this.context = toJsonCloneable((options.context || ({} as C)));
     this.rawFlags = options.rawFlags ?? {};
     this.previewMode = options.previewMode || false;
     this.deferInitialization = options.deferInitialization ?? false;
@@ -568,7 +569,14 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    * Update the evaluation context.
    */
   async updateContext(context: C): Promise<void> {
-    const pendingContext = { ...this.context, ...context };
+    let pendingContext: C;
+    try {
+      pendingContext = toJsonCloneable({ ...this.context, ...context } as C);
+    } catch (error) {
+      logger.error('[FlagClient] Error updating flags after context change:', error);
+      this.onError?.(error as Error);
+      return;
+    }
     this.context = pendingContext;
     if (this.initializationOptions) {
       this.initializationOptions.context = pendingContext;

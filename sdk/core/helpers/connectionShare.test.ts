@@ -16,9 +16,10 @@ class MemoryChannel {
   }
 
   postMessage(data: unknown) {
+    const cloned = structuredClone(data);
     for (const channel of MemoryChannel.buses.get(this.name) ?? []) {
       if (channel !== this) {
-        channel.onmessage?.({ data });
+        channel.onmessage?.({ data: cloned });
       }
     }
   }
@@ -155,6 +156,39 @@ describe('ConnectionShareHub', () => {
       allow_scheduling_by_participant: true,
     });
     expect(receivedOptions).toEqual([{ persist: false }, { persist: true }]);
+
+    leader.destroy();
+    follower.destroy();
+  });
+
+  it('forwards Vue-like Proxy context through BroadcastChannel without DataCloneError', async () => {
+    const options = shareOptions();
+    const leader = new ConnectionShareHub('ff_test', options);
+    const follower = new ConnectionShareHub('ff_test', options);
+
+    await leader.join();
+    await follower.join();
+
+    const reactiveContext = new Proxy(
+      { siteids: [1, 2], user: { key: 'weseedo' } },
+      {
+        get(obj, prop, receiver) {
+          return Reflect.get(obj, prop, receiver);
+        },
+      }
+    );
+
+    expect(() => structuredClone(reactiveContext)).toThrow();
+
+    leader.setLeaderContextHandler(async (context) => {
+      expect(context).toEqual({ siteids: [1, 2], user: { key: 'weseedo' } });
+      return { allow_scheduling_by_participant: true };
+    });
+
+    const transport = follower.createFollowerTransport();
+    await expect(transport.fetchFlags(reactiveContext)).resolves.toEqual({
+      allow_scheduling_by_participant: true,
+    });
 
     leader.destroy();
     follower.destroy();
