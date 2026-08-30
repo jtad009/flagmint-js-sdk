@@ -465,7 +465,11 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       try {
         this.transport = await useSSE();
       } catch (e) {
-        logger.warn('[FlagClient] Streaming transport failure. Deploying long-polling backup channels.', (e as Error).message);
+        const error = e instanceof Error ? e : new Error(String(e));
+        if ((error as { code?: string }).code === 'ERR_RATE_LIMITED') {
+          throw error;
+        }
+        logger.warn('[FlagClient] Streaming transport failure. Deploying long-polling backup channels.', error.message);
         this.transport = useLongPolling();
       }
     }

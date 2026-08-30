@@ -136,6 +136,32 @@ export class LongPollingTransport<C, T> implements Transport<C, T> {
       throw new Error('Unauthorized: Invalid API key');
     }
 
+    if (res.status === 429) {
+      const payload = await this.readQuotaPayload(res);
+      const cachedFlags = payload.data;
+      if (
+        cachedFlags &&
+        typeof cachedFlags === 'object' &&
+        !Array.isArray(cachedFlags)
+      ) {
+        this.currentFlags = cachedFlags as Record<string, T>;
+        this.onUpdateCallback?.(this.currentFlags);
+      }
+
+      const message =
+        typeof payload.message === 'string' && payload.message.length > 0
+          ? payload.message
+          : 'Monthly evaluation limit exceeded.';
+      const err = new Error(message);
+      Object.assign(err, {
+        code: 'ERR_RATE_LIMITED',
+        retryAfter: typeof payload.retryAfter === 'number' ? payload.retryAfter : undefined,
+        upgradeUrl: payload.upgradeUrl,
+        statusCode: payload.statusCode ?? 429,
+      });
+      throw err;
+    }
+
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     }
@@ -145,6 +171,14 @@ export class LongPollingTransport<C, T> implements Transport<C, T> {
       this.onAnalyticsUpdatedCallback?.(data.analytics as Record<string, boolean>);
     }
     return data.data as Record<string, T>;
+  }
+
+  private async readQuotaPayload(res: Response): Promise<Record<string, unknown>> {
+    try {
+      return (await res.json()) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
   }
 
   onFlagsUpdated(callback: (flags: Record<string, T>) => void): void {
