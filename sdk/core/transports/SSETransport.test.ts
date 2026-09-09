@@ -479,4 +479,87 @@ describe('SseTransport', () => {
 
     transport.destroy();
   });
+
+  it('config sync opens with fullConfig and applies lease + fullConfig', async () => {
+    const applied: string[] = [];
+    let flags: Record<string, unknown> = {};
+    const transport = new SseTransport<Record<string, any>, unknown>(
+      'http://api.flagmint.test/evaluator/v2/flags',
+      'sess-cfg',
+      { user: { key: 'u1' } },
+      undefined,
+      {
+        apiKey: 'ff_test',
+        EventSourceImpl: MockEventSource,
+        configSync: true,
+        contextAsTelemetry: true,
+        getConfigSyncParams: () => ({ wantFullConfig: true }),
+        onConfigSyncEvent: (eventName) => {
+          applied.push(eventName);
+          if (eventName === 'lease') return { publish: false };
+          flags = { demo: true };
+          return { publish: true };
+        },
+        getEvaluatedFlags: () => flags,
+        getAnalyticsMap: () => ({ demo: true }),
+      },
+    );
+
+    const analytics: Record<string, boolean>[] = [];
+    transport.onAnalyticsUpdated((map) => analytics.push(map));
+
+    const initPromise = transport.init();
+    const es = MockEventSource.instances[0];
+    const parsed = new URL(es.url);
+    expect(parsed.searchParams.get('fullConfig')).toBe('true');
+    expect(parsed.searchParams.get('sinceVersion')).toBeNull();
+
+    es.emit('connected', { connectionId: 'conn-cfg' });
+    es.emit('lease', { type: 'lease', version: 1, expiresAt: Date.now() + 60_000, signature: 'x' });
+    es.emit('fullConfig', {
+      type: 'fullConfig',
+      version: 1,
+      flags: [{ key: 'demo' }],
+      signature: 'y',
+    });
+    await initPromise;
+
+    expect(applied).toEqual(['lease', 'fullConfig']);
+    await expect(
+      transport.fetchFlags({ user: { key: 'u2' } }),
+    ).resolves.toEqual({ demo: true });
+    expect(global.fetch).toHaveBeenCalledWith(
+      'http://api.flagmint.test/evaluator/v2/flags/context',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(analytics.at(-1)).toEqual({ demo: true });
+
+    transport.destroy();
+  });
+
+  it('config sync reconnect catch-up uses sinceVersion', async () => {
+    const transport = new SseTransport<Record<string, any>, unknown>(
+      'http://api.flagmint.test/evaluator/v2/flags',
+      'sess-cfg',
+      { user: { key: 'u1' } },
+      undefined,
+      {
+        apiKey: 'ff_test',
+        EventSourceImpl: MockEventSource,
+        configSync: true,
+        getConfigSyncParams: () => ({ wantFullConfig: false, sinceVersion: 9 }),
+        onConfigSyncEvent: () => ({ publish: true }),
+        getEvaluatedFlags: () => ({ demo: false }),
+      },
+    );
+
+    const initPromise = transport.init();
+    const es = MockEventSource.instances[0];
+    expect(new URL(es.url).searchParams.get('fullConfig')).toBe('false');
+    expect(new URL(es.url).searchParams.get('sinceVersion')).toBe('9');
+    es.emit('connected', { connectionId: 'conn-cfg' });
+    es.emit('lease', { type: 'lease', version: 9, signature: 'x' });
+    await initPromise;
+    transport.destroy();
+  });
 });

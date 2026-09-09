@@ -37,3 +37,36 @@ export type {
 
 export { performAslHandshake } from './handshake';
 export type { AslHandshakeSuccess } from './handshake';
+
+export {
+  evaluateSdkFlag,
+  evaluateAllSdkFlags,
+  coerceType,
+  prepareContextForEvaluator,
+  mapToRecord,
+} from './evaluateSdkFlag';
+export {
+  evaluateRule,
+  evaluateKillSwitch,
+  evaluateOnVariation,
+  evaluateFlagWithTargetingRules,
+  applyRolloutStrategy,
+  applyPercentageRollout,
+  applyVariantRollout,
+  applyGradualRollout,
+  computeCurrentPercentage,
+  defaultHash,
+  getContextAttribute,
+} from './flagEvaluator';
+export type {
+  ExpectedFlagType,
+  FlagEvaluationResult,
+  Condition,
+  TargetingRule,
+  Rollout,
+  Variation,
+  Segment,
+  EvaluationDeps,
+} from './flagEvaluator';
+export { flattenContext, flattenEvaluationContext } from './flattenContext';
+export { stringHash, hashPercent } from './stringHash';

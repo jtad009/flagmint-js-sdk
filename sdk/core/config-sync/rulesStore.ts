@@ -288,11 +288,15 @@ export class RulesStore {
   }
 
   toSnapshot(): RulesCacheSnapshot {
+    const segments: Record<string, SdkSegment> = {};
+    this.state.segments.forEach((segment, id) => {
+      segments[id] = segment;
+    });
     return {
       version: this.state.version,
       expiresAt: this.state.expiresAt,
       flags: Array.from(this.state.flags.values()),
-      segments: Object.fromEntries(this.state.segments.entries()),
+      segments,
     };
   }
 

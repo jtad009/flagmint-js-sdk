@@ -2,12 +2,36 @@ import type { Transport } from './Transport';
 import { ensureContextSource } from '@/core/helpers/ensureContextSource';
 import { logger } from '@/core/helpers/logger';
 
-export interface SseTransportConfig {
+export interface SseTransportConfig<C = unknown, T = unknown> {
   endpoint: string;
   apiKey: string;
   context: any;
   wrapper?: { name: string; version: string };
   EventSourceImpl?: any;
+  /**
+   * When true, stream uses config-sync (`fullConfig` / `sinceVersion`) and
+   * listens for lease / fullConfig / delta / deltas instead of evaluated `flags`.
+   */
+  configSync?: boolean;
+  /** Build config-mode query params for each connect/reconnect. */
+  getConfigSyncParams?: () => { wantFullConfig: boolean; sinceVersion?: number };
+  /**
+   * Apply a signed config-sync payload (verify + reduce). Return whether the
+   * rules store is ready enough to publish evaluated flags.
+   */
+  onConfigSyncEvent?: (
+    eventName: 'lease' | 'fullConfig' | 'delta' | 'deltas',
+    payload: Record<string, unknown>,
+  ) => { publish: boolean };
+  /** Evaluate current rules store against the given (or last) context. */
+  getEvaluatedFlags?: (context: C) => Record<string, T>;
+  /** Analytics map from the rules store (flag key → analytics_enabled). */
+  getAnalyticsMap?: () => Record<string, boolean>;
+  /**
+   * When true (config sync), POST /context is fire-and-forget telemetry —
+   * flags are re-evaluated locally and returned immediately.
+   */
+  contextAsTelemetry?: boolean;
 }
 
 const INITIAL_FLAGS_TIMEOUT_MS = 5000;
@@ -102,6 +126,10 @@ export class SseTransport<C, T> implements Transport<C, T> {
 
   private connectionListener?: (event: MessageEvent) => void;
   private flagsListener?: (event: MessageEvent) => void;
+  private leaseListener?: (event: MessageEvent) => void;
+  private fullConfigListener?: (event: MessageEvent) => void;
+  private deltaListener?: (event: MessageEvent) => void;
+  private deltasListener?: (event: MessageEvent) => void;
   private quotaListener?: (event: MessageEvent) => void;
   private errorListener?: (event: MessageEvent) => void;
 
@@ -115,10 +143,14 @@ export class SseTransport<C, T> implements Transport<C, T> {
     private sessionId: string,
     initialContext: C,
     private refreshTokenCallback?: () => Promise<string>,
-    private configOptions?: Partial<SseTransportConfig>
+    private configOptions?: Partial<SseTransportConfig<C, T>>
   ) {
     this.context = ensureContextSource(initialContext);
     this.lastSentContext = this.context;
+  }
+
+  private get configSyncEnabled(): boolean {
+    return this.configOptions?.configSync === true;
   }
 
   async init(): Promise<void> {
@@ -251,6 +283,18 @@ export class SseTransport<C, T> implements Transport<C, T> {
       );
     }
 
+    // Config sync: evaluate locally against *this* context; POST /context is telemetry.
+    if (this.configSyncEnabled && this.configOptions?.contextAsTelemetry) {
+      const evaluated =
+        this.configOptions.getEvaluatedFlags?.(context) ?? this.flags;
+      this.applyFlags(evaluated);
+      if (this.configOptions.getAnalyticsMap) {
+        this.onAnalyticsUpdatedCallback?.(this.configOptions.getAnalyticsMap());
+      }
+      void this.postContextTelemetry(context);
+      return this.flags;
+    }
+
     let timeoutId: ReturnType<typeof setTimeout>;
     const nextFlagsPromise = new Promise<void>((resolve) => {
       this.nextFlagsResolve = resolve;
@@ -314,6 +358,25 @@ export class SseTransport<C, T> implements Transport<C, T> {
     }
 
     return this.flags;
+  }
+
+  /** Fire-and-forget observed-context telemetry for config-sync mode. */
+  private async postContextTelemetry(context: C): Promise<void> {
+    try {
+      await fetch(`${this.endpoint}/context`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.apiKey,
+        },
+        body: JSON.stringify({
+          connectionId: this.connectionId,
+          context,
+        }),
+      });
+    } catch (err) {
+      logger.warn('[SseTransport] Config-sync context telemetry failed (flags still local):', err);
+    }
   }
 
   private async safeReadJson(response: Response): Promise<Record<string, any>> {
@@ -386,6 +449,18 @@ export class SseTransport<C, T> implements Transport<C, T> {
       if (this.flagsListener) {
         this.eventSource.removeEventListener('flags', this.flagsListener);
       }
+      if (this.leaseListener) {
+        this.eventSource.removeEventListener('lease', this.leaseListener);
+      }
+      if (this.fullConfigListener) {
+        this.eventSource.removeEventListener('fullConfig', this.fullConfigListener);
+      }
+      if (this.deltaListener) {
+        this.eventSource.removeEventListener('delta', this.deltaListener);
+      }
+      if (this.deltasListener) {
+        this.eventSource.removeEventListener('deltas', this.deltasListener);
+      }
       if (this.quotaListener) {
         this.eventSource.removeEventListener('quota_exceeded', this.quotaListener);
       }
@@ -402,6 +477,10 @@ export class SseTransport<C, T> implements Transport<C, T> {
     this.connectReject = null;
     this.connectionListener = undefined;
     this.flagsListener = undefined;
+    this.leaseListener = undefined;
+    this.fullConfigListener = undefined;
+    this.deltaListener = undefined;
+    this.deltasListener = undefined;
     this.quotaListener = undefined;
     this.errorListener = undefined;
   }
@@ -433,7 +512,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
       const wrapperVersion = this.configOptions?.wrapper?.version || 'none';
 
       const streamContext = this.lastSentContext ?? this.context;
-      const url =
+      let url =
         `${this.endpoint}/stream?` +
         `sessionId=${encodeURIComponent(this.sessionId)}&` +
         `context=${encodeContextQueryParam(streamContext)}&` +
@@ -441,6 +520,20 @@ export class SseTransport<C, T> implements Transport<C, T> {
         `platform=${encodeURIComponent(platform)}&` +
         `wrapperName=${encodeURIComponent(wrapperName)}&` +
         `wrapperVersion=${encodeURIComponent(wrapperVersion)}`;
+
+      if (this.configSyncEnabled) {
+        const params = this.configOptions?.getConfigSyncParams?.() ?? {
+          wantFullConfig: true,
+        };
+        url += `&fullConfig=${params.wantFullConfig ? 'true' : 'false'}`;
+        if (
+          !params.wantFullConfig &&
+          typeof params.sinceVersion === 'number' &&
+          Number.isFinite(params.sinceVersion)
+        ) {
+          url += `&sinceVersion=${encodeURIComponent(String(params.sinceVersion))}`;
+        }
+      }
 
       const ChosenEventSource = this.resolveEventSourceImpl();
       if (!ChosenEventSource) {
@@ -458,14 +551,26 @@ export class SseTransport<C, T> implements Transport<C, T> {
 
       this.eventSource = new ChosenEventSource(url);
       this.connectionListener = this.createConnectionListener(resolve, reject);
-      this.flagsListener = this.createFlagsListener();
       this.quotaListener = this.createQuotaListener();
       this.errorListener = this.createStreamErrorListener();
 
       this.eventSource?.addEventListener('connected', this.connectionListener);
-      this.eventSource?.addEventListener('flags', this.flagsListener);
       this.eventSource?.addEventListener('quota_exceeded', this.quotaListener);
       this.eventSource?.addEventListener('error', this.errorListener);
+
+      if (this.configSyncEnabled) {
+        this.leaseListener = this.createConfigSyncListener('lease');
+        this.fullConfigListener = this.createConfigSyncListener('fullConfig');
+        this.deltaListener = this.createConfigSyncListener('delta');
+        this.deltasListener = this.createConfigSyncListener('deltas');
+        this.eventSource?.addEventListener('lease', this.leaseListener);
+        this.eventSource?.addEventListener('fullConfig', this.fullConfigListener);
+        this.eventSource?.addEventListener('delta', this.deltaListener);
+        this.eventSource?.addEventListener('deltas', this.deltasListener);
+      } else {
+        this.flagsListener = this.createFlagsListener();
+        this.eventSource?.addEventListener('flags', this.flagsListener);
+      }
 
       if (this.eventSource) {
         this.eventSource.onerror = () => {
@@ -559,6 +664,37 @@ export class SseTransport<C, T> implements Transport<C, T> {
         }
       } catch (err) {
         logger.warn('[SseTransport] Failed structural parsing on streaming data packet:', err);
+      }
+    };
+  }
+
+  private createConfigSyncListener(
+    eventName: 'lease' | 'fullConfig' | 'delta' | 'deltas',
+  ) {
+    return (event: MessageEvent) => {
+      try {
+        const payload = parseEventData(event);
+        const result = this.configOptions?.onConfigSyncEvent?.(eventName, payload) ?? {
+          publish: eventName !== 'lease',
+        };
+
+        if (!result.publish) {
+          logger.log(`[SseTransport] Config-sync ${eventName} applied (awaiting bootstrap).`);
+          return;
+        }
+
+        const evaluated =
+          this.configOptions?.getEvaluatedFlags?.(this.lastSentContext) ?? {};
+        this.applyFlags(evaluated);
+        if (this.configOptions?.getAnalyticsMap) {
+          this.onAnalyticsUpdatedCallback?.(this.configOptions.getAnalyticsMap());
+        }
+      } catch (err) {
+        logger.warn(`[SseTransport] Failed config-sync ${eventName} handling:`, err);
+        this.emitError(
+          err instanceof Error ? err : new Error(String(err)),
+          { rejectInit: !this.initialFlagsReceived },
+        );
       }
     };
   }

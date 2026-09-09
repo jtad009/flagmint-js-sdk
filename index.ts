@@ -38,6 +38,17 @@ export {
   verifyConfigPayloadSignature,
   canonicalizeForSigning,
   isConfigPayloadExpired,
+  evaluateSdkFlag,
+  evaluateAllSdkFlags,
+  coerceType,
+  evaluateRule,
+  evaluateFlagWithTargetingRules,
+  applyRolloutStrategy,
+  computeCurrentPercentage,
+  defaultHash,
+  flattenEvaluationContext,
+  stringHash,
+  hashPercent,
 } from './sdk/core/config-sync';
 export type {
   SdkFlagConfig,
