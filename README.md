@@ -214,17 +214,7 @@ try {
 
 `track(flagKey, eventName)` uses the same pipe for custom metrics (conversions, etc.). Only `kind: 'error'` is counted in app error rate today.
 
-### Manual verification
 
-The Flagmint dashboard evaluates its own flags with `flagmint-react-sdk` (`useFlag('homepage_variant')`). Boom that path, don't curl:
-
-1. Enable Analytics Tracking on `homepage_variant`.
-2. Run FF-EU on `:3000` and the dashboard (`npm run dev` in `flagmint`, port **5200**).
-3. Open [http://localhost:5200/?flagmint_boom=1](http://localhost:5200/?flagmint_boom=1).
-
-The homepage reads the served variant, then `trackError('homepage_variant', …)` (or POSTs `/evaluator/events` if this app still has js-sdk 1.x). Expect a **Flag error sent** toast. Metrics **App error rate** moves after the 5-minute flush.
-
-Other SDK flags: `?flagmint_boom=show_google_login` on `/login`. Production ignores the query param.
 
 ```tsx
 const enabled = useFlag('checkout_redesign', false);
