@@ -8,4 +8,26 @@ module.exports = {
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/sdk/$1',
   },
+  // @noble/* ships ESM-only; allow ts-jest to transform those packages.
+  transformIgnorePatterns: ['/node_modules/(?!(@noble)/)'],
+  transform: {
+    '^.+\\.tsx?$': [
+      'ts-jest',
+      {
+        tsconfig: {
+          allowJs: true,
+          esModuleInterop: true,
+        },
+      },
+    ],
+    '^.+\\.jsx?$': [
+      'ts-jest',
+      {
+        tsconfig: {
+          allowJs: true,
+          esModuleInterop: true,
+        },
+      },
+    ],
+  },
 };

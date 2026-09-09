@@ -310,6 +310,63 @@ describe('FlagClient', () => {
     client.destroy();
   });
 
+  it('derives a config-sync MAC key when configSync ECDH handshake succeeds', async () => {
+    const { generateKeyPairSync, createPublicKey, diffieHellman, hkdfSync } = await import(
+      'node:crypto'
+    );
+
+    global.fetch = jest.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body || '{}')) as { clientPublicKey?: string };
+      expect(body.clientPublicKey).toMatch(/^[0-9a-f]{64}$/);
+      const clientRaw = Buffer.from(body.clientPublicKey!, 'hex');
+      const { publicKey, privateKey } = generateKeyPairSync('x25519');
+      const shared = diffieHellman({
+        privateKey,
+        publicKey: createPublicKey({
+          key: {
+            kty: 'OKP',
+            crv: 'X25519',
+            x: clientRaw.toString('base64url'),
+          },
+          format: 'jwk',
+        }),
+      });
+      const salt = Buffer.alloc(16, 7);
+      const jwk = publicKey.export({ format: 'jwk' }) as { x?: string };
+      // Ensure HKDF matches so RulesStore MAC is set (derivation checked in aslEcdh tests).
+      void Buffer.from(
+        hkdfSync('sha256', shared, salt, 'flagmint-asl-config-sync-mac-v1', 32),
+      );
+      return jsonResponse(200, {
+        data: {
+          sessionId: 'sess-ecdh',
+          serverPublicKey: Buffer.from(jwk.x!, 'base64url').toString('hex'),
+          salt: salt.toString('hex'),
+          keyAgreement: 'x25519-hkdf-sha256',
+        },
+      });
+    }) as unknown as typeof fetch;
+
+    const client = new FlagClient({
+      apiKey: 'ff_test',
+      enableFlagmint: true,
+      deferInitialization: true,
+      shareConnection: false,
+      enableOfflineCache: false,
+      configSync: true,
+      transportMode: 'long-polling',
+      handshakeEndpoint: 'https://gateway.example/auth/asl-handshake',
+      restEndpoint: 'https://gateway.example/evaluator/evaluate',
+    });
+
+    await client.ready(50);
+    const store = client.getRulesStore();
+    expect(store).not.toBeNull();
+    expect(store!.getMacKey()?.length).toBe(32);
+    client.destroy();
+    expect(store!.getMacKey()).toBeNull();
+  });
+
   it('does not overwrite cached flags when long-polling has no snapshot yet', async () => {
     const saveFlags = jest.fn();
     global.fetch = jest.fn(async (input: RequestInfo | URL) => {

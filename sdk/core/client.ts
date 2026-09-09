@@ -21,6 +21,11 @@ import {
   userKeyFromContext,
   type ApplicationEvent,
 } from '@/core/helpers/applicationEvents';
+import {
+  RulesStore,
+  performAslHandshake,
+  wipeKeyMaterial,
+} from '@/core/config-sync';
 
 type TransportMode = 'auto' | 'long-polling' | 'sse';
 
@@ -31,6 +36,13 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
   persistContext?: boolean;
   transport?: Transport<C, any>;
   transportMode?: TransportMode;
+  /**
+   * Enable SDK config-sync (local evaluation path).
+   * Performs X25519 ECDH on ASL handshake and derives a session MAC key used
+   * to verify signed `lease` / `fullConfig` / `delta` payloads.
+   * Default false — keeps the legacy evaluated-flags stream.
+   */
+  configSync?: boolean;
   /**
    * Called when a non-fatal but noteworthy error occurs during or after initialization.
    * The client always resolves ready() regardless — use this to show a degraded/fallback UI.
@@ -157,6 +169,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   private subscribers: Set<FlagUpdateCallback<T>> = new Set();
   private shareHub: ConnectionShareHub<C, T> | null = null;
   private shareConnection: boolean;
+  private configSync: boolean;
+  private rulesStore: RulesStore | null = null;
 
   /**
    * Creates a new FlagClient instance.
@@ -188,6 +202,10 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     this.enableFlagmint = options.enableFlagmint ?? true;
     this.shareConnection =
       options.shareConnection ?? isConnectionSharingAvailable();
+    this.configSync = options.configSync ?? false;
+    if (this.configSync) {
+      this.rulesStore = new RulesStore();
+    }
 
     logger.setup({ debugLog: options.debugLog });
 
@@ -646,6 +664,10 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     }
     this.shareHub?.destroy();
     this.shareHub = null;
+    if (this.rulesStore) {
+      wipeKeyMaterial(this.rulesStore.getMacKey() ?? undefined);
+      this.rulesStore.setMacKey(null);
+    }
   }
 
   /**
@@ -825,45 +847,35 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    * @throws {Error} If the handshake response does not contain a valid session ID.
    */
   private async fetchFreshSessionId(apiKey: string): Promise<string> {
-    const abortController = new AbortController();
-    const abortId = setTimeout(() => abortController.abort(), HANDSHAKE_TIMEOUT_MS);
     try {
-      const authenticationHandShake = await fetch(this.aslHandshakeUrl, {
-        method: 'POST',
-        headers: { 'X-API-Key': apiKey },
-        signal: abortController.signal,
+      const result = await performAslHandshake({
+        handshakeUrl: this.aslHandshakeUrl,
+        apiKey,
+        withEcdh: this.configSync,
+        timeoutMs: HANDSHAKE_TIMEOUT_MS,
       });
 
-      if (authenticationHandShake.status === 401) {
-        throw sdkError('Invalid API credentials configuration.', 'ERR_AUTH');
-      }
-      if (authenticationHandShake.status === 429) {
-        throw sdkError('Client ingestion limits exceeded.', 'ERR_RATE_LIMITED');
-      }
-      if (!authenticationHandShake.ok) {
-        throw sdkError(
-          `Handshake server infrastructure exception (${authenticationHandShake.status})`,
-          'ERR_INTERNAL',
-          { statusCode: authenticationHandShake.status }
-        );
+      if (this.configSync && this.rulesStore) {
+        wipeKeyMaterial(this.rulesStore.getMacKey() ?? undefined);
+        this.rulesStore.setMacKey(result.configMacKey ?? null);
+        if (!result.configMacKey) {
+          throw sdkError(
+            'Config sync handshake did not derive a MAC key.',
+            'ERR_HANDSHAKE',
+          );
+        }
+        logger.log('[FlagClient] ASL ECDH complete; config-sync MAC key derived.');
       }
 
-      const handshakeData = await authenticationHandShake.json();
-      const sessionId = handshakeData?.data?.sessionId;
-
-      if (typeof sessionId !== 'string' || !sessionId) {
-        throw sdkError(
-          'Handshake parsing error: Remote platform returned empty session token.',
-          'ERR_INTERNAL'
-        );
-      }
-
-      return sessionId;
+      return result.sessionId;
     } catch (err) {
       logger.error('[FlagClient] Core Handshake failure encountered:', (err as Error).message);
       throw err;
-    } finally {
-      clearTimeout(abortId);
     }
+  }
+
+  /** Config-sync rules store (null when `configSync` is false). */
+  getRulesStore(): RulesStore | null {
+    return this.rulesStore;
   }
 }
