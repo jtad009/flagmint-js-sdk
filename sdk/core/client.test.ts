@@ -63,9 +63,10 @@ class MemoryChannel {
   }
 
   postMessage(data: unknown) {
+    const cloned = structuredClone(data);
     for (const channel of MemoryChannel.buses.get(this.name) ?? []) {
       if (channel !== this) {
-        channel.onmessage?.({ data });
+        channel.onmessage?.({ data: cloned });
       }
     }
   }
@@ -208,6 +209,48 @@ describe('FlagClient', () => {
         options: { persist: true },
       },
     ]);
+
+    client.destroy();
+  });
+
+  it('ignores stale fetchFlags results when a newer updateContext finishes first', async () => {
+    const fetchFlagsCalls: Array<{ context: Record<string, unknown> }> = [];
+    const pendingResolvers: Array<(flags: Record<string, unknown>) => void> = [];
+    const transport: Transport<Record<string, unknown>, unknown> = {
+      async init() {},
+      async fetchFlags(context) {
+        fetchFlagsCalls.push({ context });
+        return new Promise((resolve) => {
+          pendingResolvers.push(resolve);
+        });
+      },
+      destroy() {},
+      onFlagsUpdated() {},
+      onAnalyticsUpdated() {},
+    };
+
+    const client = new FlagClient({
+      apiKey: 'ff_test',
+      context: { user: 'base', custom: { source: 'SDK' } },
+      enableFlagmint: true,
+      deferInitialization: true,
+      shareConnection: false,
+      enableOfflineCache: false,
+      transport,
+    });
+
+    await client.ready(50);
+
+    const first = client.updateContext({ user: 'first' });
+    const second = client.updateContext({ user: 'second' });
+
+    pendingResolvers[1]({ from: 'second' });
+    await second;
+    pendingResolvers[0]({ from: 'first' });
+    await first;
+
+    expect(client.getFlags()).toEqual({ from: 'second' });
+    expect(fetchFlagsCalls).toHaveLength(2);
 
     client.destroy();
   });
@@ -419,6 +462,84 @@ describe('FlagClient', () => {
         leader.destroy();
       }
     );
+
+    it('JSON-clones a Vue-like Proxy context from a follower updateContext', async () => {
+      const persistCalls: Array<Record<string, unknown>> = [];
+      global.fetch = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes('asl-handshake')) {
+          return jsonResponse(200, { data: { sessionId: 'sess-1' } });
+        }
+        if (url.includes('/context')) {
+          persistCalls.push(JSON.parse(String(init?.body)));
+          setImmediate(() => {
+            const es = AutoMockEventSource.instances.at(-1);
+            es?.emit('flags', { flags: { afterContext: true } });
+          });
+          return jsonResponse(202, { statusCode: 202 });
+        }
+        return jsonResponse(500, {});
+      }) as unknown as typeof fetch;
+
+      const share = shareHooks();
+      const apiKey = 'ff_share_proxy_context';
+      const noCache = {
+        loadFlags: () => null,
+        saveFlags: () => undefined,
+        loadContext: () => null,
+        saveContext: () => undefined,
+      };
+
+      const leader = new FlagClient({
+        apiKey,
+        context: { user: { key: 'leader' } },
+        enableFlagmint: true,
+        deferInitialization: true,
+        shareConnection: true,
+        share,
+        persistContext: false,
+        enableOfflineCache: false,
+        cacheAdapter: noCache,
+        transportMode: 'sse',
+        EventSourceImpl: AutoMockEventSource,
+      });
+      await leader.ready();
+
+      const follower = new FlagClient({
+        apiKey,
+        context: { user: { key: 'follower-boot' } },
+        enableFlagmint: true,
+        deferInitialization: true,
+        shareConnection: true,
+        share,
+        persistContext: false,
+        enableOfflineCache: false,
+        cacheAdapter: noCache,
+        transportMode: 'sse',
+        EventSourceImpl: AutoMockEventSource,
+      });
+      await follower.ready();
+      expect(clientInternals(follower).shareHub.currentRole).toBe('follower');
+
+      const reactiveContext = new Proxy(
+        { user: { key: 'from-follower' }, siteids: 42 },
+        {
+          get(obj, prop, receiver) {
+            return Reflect.get(obj, prop, receiver);
+          },
+        }
+      );
+
+      await follower.updateContext(reactiveContext);
+
+      expect(persistCalls.at(-1)).toMatchObject({
+        connectionId: 'conn-1',
+        context: { user: { key: 'from-follower' }, siteids: 42 },
+      });
+
+      follower.destroy();
+      leader.destroy();
+    });
   });
 
   describe('trackError', () => {

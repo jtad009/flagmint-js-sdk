@@ -16,9 +16,10 @@ class MemoryChannel {
   }
 
   postMessage(data: unknown) {
+    const cloned = structuredClone(data);
     for (const channel of MemoryChannel.buses.get(this.name) ?? []) {
       if (channel !== this) {
-        channel.onmessage?.({ data });
+        channel.onmessage?.({ data: cloned });
       }
     }
   }
@@ -160,6 +161,39 @@ describe('ConnectionShareHub', () => {
     follower.destroy();
   });
 
+  it('forwards Vue-like Proxy context through BroadcastChannel without DataCloneError', async () => {
+    const options = shareOptions();
+    const leader = new ConnectionShareHub('ff_test', options);
+    const follower = new ConnectionShareHub('ff_test', options);
+
+    await leader.join();
+    await follower.join();
+
+    const reactiveContext = new Proxy(
+      { siteids: [1, 2], user: { key: 'weseedo' } },
+      {
+        get(obj, prop, receiver) {
+          return Reflect.get(obj, prop, receiver);
+        },
+      }
+    );
+
+    expect(() => structuredClone(reactiveContext)).toThrow();
+
+    leader.setLeaderContextHandler(async (context) => {
+      expect(context).toEqual({ siteids: [1, 2], user: { key: 'weseedo' } });
+      return { allow_scheduling_by_participant: true };
+    });
+
+    const transport = follower.createFollowerTransport();
+    await expect(transport.fetchFlags(reactiveContext)).resolves.toEqual({
+      allow_scheduling_by_participant: true,
+    });
+
+    leader.destroy();
+    follower.destroy();
+  });
+
   it('promotes a follower when the leader releases the lock', async () => {
     const options = shareOptions();
     const leader = new ConnectionShareHub('ff_test', options);
@@ -207,6 +241,45 @@ describe('ConnectionShareHub', () => {
 
     first.destroy();
     second.destroy();
+  });
+
+  it('ignores malformed error packets from the share channel', async () => {
+    const options = shareOptions();
+    const leader = new ConnectionShareHub('ff_test', options);
+    const follower = new ConnectionShareHub('ff_test', options);
+    const errors: Error[] = [];
+
+    await leader.join();
+    leader.broadcastFlags({ featureA: true });
+    await follower.join();
+
+    const transport = follower.createFollowerTransport();
+    transport.onError?.((err) => errors.push(err));
+    await transport.init();
+
+    const spy = new MemoryChannel('flagmint-share:ff_test');
+    spy.postMessage({ type: 'error', memberId: 'evil' });
+
+    expect(errors).toHaveLength(0);
+
+    leader.destroy();
+    follower.destroy();
+  });
+
+  it('rejects pending flag waiters when destroy() runs', async () => {
+    jest.useFakeTimers();
+    const options = shareOptions();
+    const follower = new ConnectionShareHub('ff_test', options);
+
+    await follower.join();
+    const transport = follower.createFollowerTransport();
+    const initPromise = transport.init();
+
+    follower.destroy();
+    await expect(initPromise).rejects.toThrow('Connection share hub closed.');
+
+    jest.advanceTimersByTime(6000);
+    jest.useRealTimers();
   });
 
   it('retries takeover after a failed promotion', async () => {

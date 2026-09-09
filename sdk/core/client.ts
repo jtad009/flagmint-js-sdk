@@ -11,6 +11,7 @@ import {
   isConnectionSharingAvailable,
   type ConnectionShareOptions,
 } from '@/core/helpers/connectionShare';
+import { toJsonCloneable } from '@/core/helpers/jsonCloneable';
 import {
   EVENT_FLUSH_MS,
   MAX_EVENT_BATCH,
@@ -134,6 +135,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   private eventFlushTimer: ReturnType<typeof setTimeout> | null = null;
   /** null = server has not sent a map yet; send and let ingest drop. */
   private analyticsByFlag: Record<string, boolean> | null = null;
+  private contextUpdateSeq = 0;
 
   private readyPromise!: Promise<void>;
   private resolveReady!: () => void;
@@ -178,7 +180,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       saveContext: syncCache.saveCachedContext
     };
 
-    this.context = (options.context || ({} as C));
+    this.context = toJsonCloneable((options.context || ({} as C)));
     this.rawFlags = options.rawFlags ?? {};
     this.previewMode = options.previewMode || false;
     this.deferInitialization = options.deferInitialization ?? false;
@@ -320,9 +322,15 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     this.shareHub = new ConnectionShareHub<C, T>(this.apiKey, options.share);
     this.shareHub.onPromote(async () => {
       logger.log('[FlagClient] Share leader departed. Promoting this document to hold the stream.');
-      await this.setupTransport(options);
-      this.attachShareLeader();
-      this.shareHub?.broadcastFlags(this.flags as Record<string, T>);
+      try {
+        await this.setupTransport(options);
+        this.attachShareLeader();
+        this.shareHub?.broadcastFlags(this.flags as Record<string, T>);
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        logger.error('[FlagClient] Promotion to share leader failed:', error);
+        this.onError?.(error);
+      }
     });
 
     const role = await this.shareHub.join();
@@ -418,9 +426,18 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
         }
       );
       bindTransport(sse);
-      await sse.init();
-      logger.log('[FlagClient] SSE streaming transport initialized successfully.');
-      return sse;
+      try {
+        await sse.init();
+        logger.log('[FlagClient] SSE streaming transport initialized successfully.');
+        return sse;
+      } catch (error) {
+        try {
+          sse.destroy();
+        } catch (destroyError) {
+          logger.warn('[FlagClient] Failed to destroy the SSE transport after fallback.', destroyError);
+        }
+        throw error;
+      }
     };
 
     const useLongPolling = (): Transport<C, T> => {
@@ -431,7 +448,11 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
         backoffMultiplier: 2
       });
       bindTransport(lp);
-      void lp.init();
+      void lp.init().catch((err) => {
+        const error = err instanceof Error ? err : new Error(String(err));
+        logger.error('[FlagClient] Long-polling transport failed to initialize:', error);
+        this.onError?.(error);
+      });
       return lp;
     };
 
@@ -444,7 +465,11 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       try {
         this.transport = await useSSE();
       } catch (e) {
-        logger.warn('[FlagClient] Streaming transport failure. Deploying long-polling backup channels.', (e as Error).message);
+        const error = e instanceof Error ? e : new Error(String(e));
+        if ((error as { code?: string }).code === 'ERR_RATE_LIMITED') {
+          throw error;
+        }
+        logger.warn('[FlagClient] Streaming transport failure. Deploying long-polling backup channels.', error.message);
         this.transport = useLongPolling();
       }
     }
@@ -568,7 +593,14 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    * Update the evaluation context.
    */
   async updateContext(context: C): Promise<void> {
-    const pendingContext = { ...this.context, ...context };
+    let pendingContext: C;
+    try {
+      pendingContext = toJsonCloneable({ ...this.context, ...context } as C);
+    } catch (error) {
+      logger.error('[FlagClient] Error updating flags after context change:', error);
+      this.onError?.(error as Error);
+      return;
+    }
     this.context = pendingContext;
     if (this.initializationOptions) {
       this.initializationOptions.context = pendingContext;
@@ -580,11 +612,13 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     }
 
     if (this.transport && typeof this.transport.fetchFlags === 'function') {
+      const seq = ++this.contextUpdateSeq;
       try {
         const updatedFlags = await this.transport.fetchFlags(pendingContext, {
           persist:
             this.shareHub?.currentRole === 'follower' ? this.persistContext : true,
         });
+        if (seq !== this.contextUpdateSeq) return;
         this.updateFlags(updatedFlags);
       } catch (error) {
         logger.error('[FlagClient] Error updating flags after context change:', error);
@@ -623,8 +657,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
  * become available (or until the specified timeout expires) before awaiting
  * completion of the underlying transport initialization.
  *
- * This method guarantees that transport or connection failures are surfaced,
- * even when feature flags have already been restored from cache.
+ * Transport and connection failures do not reject this promise. The client reports them through the `onError` option and resolves anyway, so the
+ * application can render a fallback or degraded UI.
  *
  * @param {number} [timeoutMs=3000] - The maximum amount of time, in
  * milliseconds, to wait for the initial feature flag payload before
@@ -633,8 +667,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
  * @returns {Promise<void>} A promise that resolves when the client is fully
  * initialized and ready to evaluate feature flags.
  *
- * @throws {Error} If client initialization or the underlying transport fails,
- * such as authentication, rate limiting, or connection errors.
+ * 
  */
   async ready(timeoutMs: number = 3000): Promise<void> {
     logger.log('[FlagClient] 🔍 ready() START');

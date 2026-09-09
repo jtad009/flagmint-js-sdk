@@ -35,6 +35,7 @@
  */
 import type { Transport } from '@/core/transports/Transport';
 import { logger } from '@/core/helpers/logger';
+import { toJsonCloneable } from '@/core/helpers/jsonCloneable';
 
 const LOCK_TTL_MS = 4000;
 const HEARTBEAT_MS = 1500;
@@ -141,6 +142,10 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
   private closed = false;
   private latestFlags: Record<string, T> | null = null;
   private flagsWaiters: Array<(flags: Record<string, T>) => void> = [];
+  private flagsTimeouts: Array<{
+    timeoutId: ReturnType<typeof setTimeout>;
+    reject: (err: Error) => void;
+  }> = [];
   private contextWaiters = new Map<string, {
     resolve: (flags: Record<string, T>) => void;
     reject: (err: Error) => void;
@@ -207,7 +212,7 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
       this.becomeLeader();
     } else {
       this.role = 'follower';
-      this.channel.postMessage({ type: 'hello', memberId: this.memberId });
+      this.post({ type: 'hello', memberId: this.memberId });
       this.watchId = this.setTimer(() => this.maybeTakeover(), HEARTBEAT_MS);
       logger.log('[ConnectionShare] Joined as follower; waiting for leader flag snapshot.');
     }
@@ -243,13 +248,13 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
   broadcastFlags(flags: Record<string, T>): void {
     if (this.role !== 'leader' || !this.channel) return;
     this.latestFlags = flags;
-    this.channel.postMessage({ type: 'flags', memberId: this.memberId, flags });
+    this.post({ type: 'flags', memberId: this.memberId, flags });
   }
 
   /** Leader-only: mirror a transport `onError` (auth, quota) to followers. */
   broadcastError(error: Error): void {
     if (this.role !== 'leader' || !this.channel) return;
-    this.channel.postMessage({
+    this.post({
       type: 'error',
       memberId: this.memberId,
       message: error.message,
@@ -298,7 +303,7 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
 
     if (this.role === 'leader') {
       this.releaseLock();
-      this.channel?.postMessage({ type: 'bye', memberId: this.memberId });
+      this.post({ type: 'bye', memberId: this.memberId });
     }
 
     const channel = this.channel;
@@ -307,6 +312,10 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
       setTimeout(() => channel.close(), 0);
     }
     this.flagsWaiters = [];
+    this.flagsTimeouts.splice(0).forEach(({ timeoutId, reject }) => {
+      clearTimeout(timeoutId);
+      reject(new Error('Connection share hub closed.'));
+    });
     this.contextWaiters.forEach(({ reject }) => reject(new Error('Connection share hub closed.')));
     this.contextWaiters.clear();
   }
@@ -323,6 +332,29 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     window.removeEventListener('pagehide', this.unloadHandler);
     window.removeEventListener('beforeunload', this.unloadHandler);
     this.unloadHandler = undefined;
+  }
+
+  /**
+   * JSON-clone then post. Native `BroadcastChannel` structured-clones the
+   * payload; Vue reactive Proxies and similar host objects throw
+   * `DataCloneError`. JSON.stringify can walk those Proxies.
+   */
+  private post(message: ShareMessage<C, T>): void {
+    if (!this.channel) return;
+    const payload = toJsonCloneable(message);
+    try {
+      this.channel.postMessage(payload);
+    } catch (err) {
+      throw Object.assign(
+        new Error(
+          'Failed to broadcast on the shared Flagmint connection. Context and flags must be JSON-serializable.'
+        ),
+        {
+          code: 'ERR_CONTEXT_NOT_CLONEABLE',
+          cause: err instanceof Error ? err : new Error(String(err)),
+        }
+      );
+    }
   }
 
   /** Open the BroadcastChannel for this API key, or a test factory channel. */
@@ -345,7 +377,7 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     }
     this.heartbeatId = this.setTimer(() => {
       this.refreshLock();
-      this.channel?.postMessage({ type: 'alive', memberId: this.memberId });
+      this.post({ type: 'alive', memberId: this.memberId });
     }, HEARTBEAT_MS);
     logger.log('[ConnectionShare] Elected leader for API key share group.');
   }
@@ -381,7 +413,7 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     switch (message.type) {
       case 'hello':
         if (this.role === 'leader' && this.latestFlags) {
-          this.channel?.postMessage({
+          this.post({
             type: 'flags',
             memberId: this.memberId,
             flags: this.latestFlags,
@@ -399,6 +431,7 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
         break;
       case 'error':
         if (this.role === 'leader') return;
+        if (typeof message.message !== 'string' || message.message.length === 0) return;
         {
           const err = new Error(message.message);
           Object.assign(err, { code: message.code, retryAfter: message.retryAfter });
@@ -444,7 +477,7 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
     message: Extract<ShareMessage<C, T>, { type: 'context-request' }>
   ): Promise<void> {
     if (!this.leaderContextHandler) {
-      this.channel?.postMessage({
+      this.post({
         type: 'context-result',
         requestId: message.requestId,
         error: { message: 'Leader has no active transport for context updates.', code: 'ERR_INTERNAL' },
@@ -456,14 +489,14 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
         persist: message.persist,
       });
       this.broadcastFlags(flags);
-      this.channel?.postMessage({
+      this.post({
         type: 'context-result',
         requestId: message.requestId,
         flags,
       });
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      this.channel?.postMessage({
+      this.post({
         type: 'context-result',
         requestId: message.requestId,
         error: { message: error.message, code: (error as { code?: string }).code },
@@ -477,18 +510,22 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
    */
   private waitForFlags(): Promise<Record<string, T>> {
     if (this.latestFlags) return Promise.resolve(this.latestFlags);
+    if (this.closed) return Promise.reject(new Error('Connection share hub closed.'));
 
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
         this.flagsWaiters = this.flagsWaiters.filter((waiter) => waiter !== onFlags);
+        this.flagsTimeouts = this.flagsTimeouts.filter((entry) => entry.timeoutId !== timeoutId);
         reject(new Error('Timed out waiting for shared flag snapshot from the leader iframe.'));
       }, FOLLOWER_WAIT_MS);
 
       const onFlags = (flags: Record<string, T>) => {
         clearTimeout(timeoutId);
+        this.flagsTimeouts = this.flagsTimeouts.filter((entry) => entry.timeoutId !== timeoutId);
         resolve(flags);
       };
       this.flagsWaiters.push(onFlags);
+      this.flagsTimeouts.push({ timeoutId, reject });
     });
   }
 
@@ -529,13 +566,19 @@ export class ConnectionShareHub<C = Record<string, unknown>, T = unknown> {
         },
       });
 
-      this.channel?.postMessage({
-        type: 'context-request',
-        memberId: this.memberId,
-        requestId,
-        context,
-        persist: options?.persist,
-      });
+      try {
+        this.post({
+          type: 'context-request',
+          memberId: this.memberId,
+          requestId,
+          context,
+          persist: options?.persist,
+        });
+      } catch (err) {
+        this.contextWaiters.delete(requestId);
+        clearTimeout(timeoutId);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
     });
   }
 

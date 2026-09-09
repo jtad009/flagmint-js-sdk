@@ -85,6 +85,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
   private eventSource: EventSource | null = null;
   private flags: Record<string, T> = {};
   private context: C;
+  private lastSentContext: C;
   private connectionId: string | null = null;
   private onFlagsUpdatedCallback?: (flags: Record<string, T>) => void;
   private onAnalyticsUpdatedCallback?: (analytics: Record<string, boolean>) => void;
@@ -117,6 +118,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
     private configOptions?: Partial<SseTransportConfig>
   ) {
     this.context = ensureContextSource(initialContext);
+    this.lastSentContext = this.context;
   }
 
   async init(): Promise<void> {
@@ -170,6 +172,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
       if (options?.persist !== false) {
         this.context = pendingContext;
       }
+      this.lastSentContext = pendingContext;
       return await this.performContextUpdate(pendingContext);
     } finally {
       release();
@@ -429,10 +432,11 @@ export class SseTransport<C, T> implements Transport<C, T> {
       const wrapperName = this.configOptions?.wrapper?.name || 'native-js';
       const wrapperVersion = this.configOptions?.wrapper?.version || 'none';
 
+      const streamContext = this.lastSentContext ?? this.context;
       const url =
         `${this.endpoint}/stream?` +
         `sessionId=${encodeURIComponent(this.sessionId)}&` +
-        `context=${encodeContextQueryParam(this.context)}&` +
+        `context=${encodeContextQueryParam(streamContext)}&` +
         `sdkVersion=${encodeURIComponent(sdkVersion)}&` +
         `platform=${encodeURIComponent(platform)}&` +
         `wrapperName=${encodeURIComponent(wrapperName)}&` +
