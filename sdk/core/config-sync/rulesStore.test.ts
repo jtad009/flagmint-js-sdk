@@ -138,6 +138,35 @@ describe('RulesStore reducer', () => {
     expect(catchUp.state.flags.has('b')).toBe(true);
   });
 
+  it('deltas catch-up accepts historical item TTLs when envelope is fresh', () => {
+    let state = createEmptyRulesState();
+    state = reduceRules(state, fullConfig(1, [flag('a')]), NOW).state;
+
+    const staleItem = {
+      ...delta(1, 2, [flag('a', true)]),
+      expiresAt: NOW - 1,
+    };
+    const catchUp = reduceRules(
+      state,
+      {
+        type: 'deltas',
+        fromVersion: 1,
+        toVersion: 2,
+        expiresAt: NOW + TTL,
+        items: [staleItem],
+        signature: 'unsigned',
+      },
+      NOW,
+    );
+
+    expect(catchUp.ok).toBe(true);
+    if (!catchUp.ok) return;
+    expect(catchUp.state.version).toBe(2);
+    expect(catchUp.state.ready).toBe(true);
+    expect(catchUp.state.expiresAt).toBe(NOW + TTL);
+    expect(catchUp.state.flags.get('a')?.default_value).toBe(true);
+  });
+
   it('lease renew updates expiry without clearing flags', () => {
     let state = createEmptyRulesState();
     state = reduceRules(state, fullConfig(2, [flag('a')]), NOW).state;
@@ -180,6 +209,8 @@ describe('RulesStore MAC gate', () => {
     const wrongKey = new Uint8Array(32).fill(4);
     const tampered = store.applySigned(delta(1, 2, [flag('a', false)], [], wrongKey), NOW);
     expect(tampered.ok).toBe(false);
+    if (!tampered.ok) expect(tampered.reason).toBe('bad_signature');
+    expect(store.getFlag('a')?.default_value).toBe(true);
   });
 
   it('hydrateFromSnapshot respects expiry for reconnect mode', () => {

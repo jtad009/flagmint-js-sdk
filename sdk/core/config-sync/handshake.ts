@@ -118,6 +118,16 @@ export async function performAslHandshake(input: {
       );
     }
 
+    if (
+      typeof data.keyAgreement === 'string' &&
+      data.keyAgreement !== ASL_KEY_AGREEMENT
+    ) {
+      throw sdkError(
+        `ASL ECDH unsupported key agreement: ${data.keyAgreement}`,
+        'ERR_HANDSHAKE',
+      );
+    }
+
     const { configMacKey } = deriveAslMacKey({
       privateKey,
       peerPublicKeyHex: data.serverPublicKey,

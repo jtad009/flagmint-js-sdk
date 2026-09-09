@@ -169,7 +169,12 @@ export function reduceRules(
       }
       let current = state;
       for (const step of action.items || []) {
-        const stepResult = reduceRules(current, { ...step, type: 'delta' }, now);
+        // Envelope expiry is already checked above; item TTLs are historical.
+        const stepResult = reduceRules(
+          current,
+          { ...step, type: 'delta', expiresAt: action.expiresAt },
+          now,
+        );
         if (!stepResult.ok) {
           return stepResult;
         }

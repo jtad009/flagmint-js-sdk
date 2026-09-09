@@ -83,25 +83,20 @@ describe('ASL ECDH + MAC verify', () => {
 
   it('rejects tampered payloads', () => {
     const mac = new Uint8Array(32).fill(9);
-    const body = {
+    const expiresAt = Date.now() + 60_000;
+    const unsigned = {
       type: 'fullConfig',
       version: 1,
       compiledAt: 1,
-      expiresAt: Date.now() + 60_000,
+      expiresAt,
       flags: [],
       segments: {},
-      signature: signConfigPayload(
-        {
-          type: 'fullConfig',
-          version: 1,
-          compiledAt: 1,
-          expiresAt: Date.now() + 60_000,
-          flags: [],
-          segments: {},
-        },
-        mac,
-      ),
     };
+    const body = {
+      ...unsigned,
+      signature: signConfigPayload(unsigned, mac),
+    };
+    expect(verifyConfigPayloadSignature(body, mac)).toBe(true);
     const tampered = { ...body, version: 99 };
     expect(verifyConfigPayloadSignature(tampered, mac)).toBe(false);
   });
@@ -155,5 +150,33 @@ describe('ASL ECDH + MAC verify', () => {
 
     expect(result.sessionId).toBe('fm_asl_legacy');
     expect(result.configMacKey).toBeUndefined();
+  });
+
+  it('performAslHandshake rejects unsupported keyAgreement', async () => {
+    const fetchImpl = jest.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body || '{}')) as { clientPublicKey?: string };
+      const server = serverAgree(body.clientPublicKey!);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            sessionId: 'fm_asl_test',
+            serverPublicKey: server.serverPublicKeyHex,
+            salt: server.saltHex,
+            keyAgreement: 'something-else',
+          },
+        }),
+      } as Response;
+    });
+
+    await expect(
+      performAslHandshake({
+        handshakeUrl: 'http://localhost/auth/asl-handshake',
+        apiKey: 'ff_test',
+        withEcdh: true,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+    ).rejects.toMatchObject({ code: 'ERR_HANDSHAKE' });
   });
 });
