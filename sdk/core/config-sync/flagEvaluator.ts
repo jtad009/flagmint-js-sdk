@@ -1056,7 +1056,7 @@ export function applyRolloutStrategy(
 
     default: {
       console.warn(
-        `[Flag Evaluation] Unsupported rollout strategy '${(rollout as any).strategy
+        `[Flag Evaluation] Unsupported rollout strategy '${(rollout as any)?.strategy
         }'${ruleId ? ` on rule ${ruleId}` : ""}, falling back`
       );
       return coerceType(fallbackValue, expectedType);

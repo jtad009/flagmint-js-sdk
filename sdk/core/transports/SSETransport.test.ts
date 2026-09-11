@@ -537,6 +537,52 @@ describe('SseTransport', () => {
     transport.destroy();
   });
 
+  it('config sync evaluates locally during reconnect without an active connectionId', async () => {
+    const fetchMock = global.fetch as jest.Mock;
+    fetchMock.mockClear();
+
+    const transport = new SseTransport<Record<string, any>, unknown>(
+      'http://api.flagmint.test/evaluator/v2/flags',
+      'sess-cfg',
+      { user: { key: 'u1' } },
+      undefined,
+      {
+        apiKey: 'ff_test',
+        EventSourceImpl: MockEventSource,
+        configSync: true,
+        contextAsTelemetry: true,
+        getConfigSyncParams: () => ({ wantFullConfig: true }),
+        onConfigSyncEvent: () => ({ publish: true }),
+        getEvaluatedFlags: (ctx) => ({
+          demo: (ctx as { user?: { key?: string } })?.user?.key === 'after-blip',
+        }),
+      },
+    );
+
+    const initPromise = transport.init();
+    const es = MockEventSource.instances[0];
+    es.emit('connected', { connectionId: 'conn-cfg' });
+    es.emit('fullConfig', {
+      type: 'fullConfig',
+      version: 1,
+      flags: [{ key: 'demo' }],
+      signature: 'y',
+    });
+    await initPromise;
+
+    // Simulate mid-reconnect: stream torn down, connectionId cleared.
+    (transport as any).cleanupEventSource();
+    expect((transport as any).connectionId).toBeNull();
+
+    await expect(
+      transport.fetchFlags({ user: { key: 'after-blip' } }),
+    ).resolves.toEqual({ demo: true });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    transport.destroy();
+  });
+
   it('config sync reconnect catch-up uses sinceVersion', async () => {
     const transport = new SseTransport<Record<string, any>, unknown>(
       'http://api.flagmint.test/evaluator/v2/flags',

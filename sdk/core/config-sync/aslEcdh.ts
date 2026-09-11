@@ -42,6 +42,15 @@ export function parsePeerPublicKeyHex(hex: string): Uint8Array {
   return hexToBytes(normalized);
 }
 
+/** HKDF salt from the handshake — public; must be even-length hex (FF-EU uses 16 bytes). */
+export function parseSaltHex(hex: string): Uint8Array {
+  const normalized = hex.trim().toLowerCase();
+  if (!/^([0-9a-f]{2})+$/.test(normalized)) {
+    throw new Error('ASL ECDH: salt must be an even-length hex string');
+  }
+  return hexToBytes(normalized);
+}
+
 /**
  * Client half of X25519 ECDH + HKDF.
  * Derives the same MAC key as the server without transmitting the secret.
@@ -52,7 +61,7 @@ export function deriveAslMacKey(input: {
   saltHex: string;
 }): AslDerivedMac {
   const peerPublicKey = parsePeerPublicKeyHex(input.peerPublicKeyHex);
-  const salt = hexToBytes(input.saltHex.trim().toLowerCase());
+  const salt = parseSaltHex(input.saltHex);
   const shared = x25519.getSharedSecret(input.privateKey, peerPublicKey);
   const configMacKey = hkdf(
     sha256,

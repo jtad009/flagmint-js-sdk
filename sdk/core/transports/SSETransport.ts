@@ -272,6 +272,27 @@ export class SseTransport<C, T> implements Transport<C, T> {
   }
 
   private async performContextUpdate(context: C): Promise<Record<string, T>> {
+    // Config sync: evaluate locally against *this* context; POST /context is telemetry.
+    // Local eval does not need a live stream (e.g. mid-reconnect when connectionId is null).
+    if (this.configSyncEnabled && this.configOptions?.contextAsTelemetry) {
+      if (!this.apiKey) {
+        throw createSdkError(
+          'SSE context update requires an API key.',
+          'ERR_AUTH',
+        );
+      }
+      const evaluated =
+        this.configOptions.getEvaluatedFlags?.(context) ?? this.flags;
+      this.applyFlags(evaluated);
+      if (this.configOptions.getAnalyticsMap) {
+        this.onAnalyticsUpdatedCallback?.(this.configOptions.getAnalyticsMap());
+      }
+      if (this.connectionId) {
+        void this.postContextTelemetry(context);
+      }
+      return this.flags;
+    }
+
     if (!this.connectionId) {
       throw new Error('SSE configuration update blocked: stream connection not active.');
     }
@@ -281,18 +302,6 @@ export class SseTransport<C, T> implements Transport<C, T> {
         'SSE context update requires an API key.',
         'ERR_AUTH'
       );
-    }
-
-    // Config sync: evaluate locally against *this* context; POST /context is telemetry.
-    if (this.configSyncEnabled && this.configOptions?.contextAsTelemetry) {
-      const evaluated =
-        this.configOptions.getEvaluatedFlags?.(context) ?? this.flags;
-      this.applyFlags(evaluated);
-      if (this.configOptions.getAnalyticsMap) {
-        this.onAnalyticsUpdatedCallback?.(this.configOptions.getAnalyticsMap());
-      }
-      void this.postContextTelemetry(context);
-      return this.flags;
     }
 
     let timeoutId: ReturnType<typeof setTimeout>;

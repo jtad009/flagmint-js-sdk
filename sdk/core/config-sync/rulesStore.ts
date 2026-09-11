@@ -128,15 +128,21 @@ export function reduceRules(
 
   switch (action.type) {
     case 'lease': {
+      // Lease renews expiry only. Version is a bookmark for flag data.
+      // If the lease disagrees with our bookmark, keep ours and ask for a
+      // full refresh so we don't skip (or invent) updates.
+      const versionMismatch = action.version !== state.version;
       return {
         ok: true,
         state: {
           ...cloneState(state),
-          version: action.version,
+          version: state.version,
           expiresAt: action.expiresAt,
           ready: true,
-          // Lease alone does not clear needsFullConfig if we have no flags yet.
-          needsFullConfig: state.flags.size === 0 ? true : state.needsFullConfig,
+          needsFullConfig:
+            state.flags.size === 0 || versionMismatch
+              ? true
+              : state.needsFullConfig,
         },
       };
     }
@@ -179,6 +185,14 @@ export function reduceRules(
           return stepResult;
         }
         current = stepResult.state;
+      }
+      // Envelope claims a target version — only trust it if the steps got us there.
+      if (current.version !== action.toVersion) {
+        return {
+          ok: false,
+          reason: 'version_gap',
+          state: { ...cloneState(state), needsFullConfig: true },
+        };
       }
       return {
         ok: true,

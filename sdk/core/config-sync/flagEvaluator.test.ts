@@ -1838,7 +1838,7 @@ describe("config-sync/flagEvaluator (FF-EU port)", () => {
         kind: 'custom',
         order_index: 0,
         conditions: [{ type: 'rule', attribute: 'key', operator: 'eq', value: 'user-1' }],
-        rollout_id: 'off-rolloute',
+        rollout_id: 'off-rollout',
       } as any,
     ];
 
@@ -1856,8 +1856,8 @@ describe("config-sync/flagEvaluator (FF-EU port)", () => {
 
     expect(result).toBe(false);
     expect(percentageSpy).not.toHaveBeenCalled();
-    expect(warningsSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Rule r1 references missing rollout_id')
+    expect(warningsSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('references missing rollout_id')
     );
     warningsSpy.mockRestore();
   });

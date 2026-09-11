@@ -57,12 +57,23 @@ export async function performAslHandshake(input: {
       body = JSON.stringify({ clientPublicKey: pair.publicKeyHex });
     }
 
-    const res = await fetchFn(input.handshakeUrl, {
-      method: 'POST',
-      headers,
-      body,
-      signal: abortController.signal,
-    });
+    let res: Response;
+    try {
+      res = await fetchFn(input.handshakeUrl, {
+        method: 'POST',
+        headers,
+        body,
+        signal: abortController.signal,
+      });
+    } catch (cause) {
+      throw sdkError(
+        abortController.signal.aborted
+          ? `ASL handshake timed out after ${timeoutMs}ms`
+          : 'ASL handshake network failure',
+        'ERR_INTERNAL',
+        { cause },
+      );
+    }
 
     if (res.status === 401) {
       throw sdkError('Invalid API credentials configuration.', 'ERR_AUTH');
@@ -87,7 +98,12 @@ export async function performAslHandshake(input: {
       );
     }
 
-    const handshakeData = await res.json();
+    const handshakeData = await res.json().catch(() => {
+      throw sdkError(
+        'Handshake parsing error: response body is not JSON.',
+        'ERR_INTERNAL',
+      );
+    });
     const data = (handshakeData?.data ?? handshakeData) as {
       sessionId?: string;
       serverPublicKey?: string;
@@ -128,11 +144,22 @@ export async function performAslHandshake(input: {
       );
     }
 
-    const { configMacKey } = deriveAslMacKey({
-      privateKey,
-      peerPublicKeyHex: data.serverPublicKey,
-      saltHex: data.salt,
-    });
+    const { configMacKey } = (() => {
+      try {
+        return deriveAslMacKey({
+          privateKey,
+          peerPublicKeyHex: data.serverPublicKey,
+          saltHex: data.salt,
+        });
+      } catch (err) {
+        throw sdkError(
+          err instanceof Error
+            ? err.message
+            : 'ASL ECDH key derivation failed.',
+          'ERR_HANDSHAKE',
+        );
+      }
+    })();
 
     return {
       sessionId,

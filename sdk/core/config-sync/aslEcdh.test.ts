@@ -179,4 +179,75 @@ describe('ASL ECDH + MAC verify', () => {
       }),
     ).rejects.toMatchObject({ code: 'ERR_HANDSHAKE' });
   });
+
+  it('performAslHandshake rejects malformed salt with ERR_HANDSHAKE', async () => {
+    const fetchImpl = jest.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body || '{}')) as { clientPublicKey?: string };
+      const server = serverAgree(body.clientPublicKey!);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            sessionId: 'fm_asl_test',
+            serverPublicKey: server.serverPublicKeyHex,
+            salt: 'not-hex',
+            keyAgreement: 'x25519-hkdf-sha256',
+          },
+        }),
+      } as Response;
+    });
+
+    await expect(
+      performAslHandshake({
+        handshakeUrl: 'http://localhost/auth/asl-handshake',
+        apiKey: 'ff_test',
+        withEcdh: true,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+    ).rejects.toMatchObject({
+      code: 'ERR_HANDSHAKE',
+      message: expect.stringContaining('salt'),
+    });
+  });
+
+  it('performAslHandshake maps network failure to ERR_INTERNAL', async () => {
+    const fetchImpl = jest.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+
+    await expect(
+      performAslHandshake({
+        handshakeUrl: 'http://localhost/auth/asl-handshake',
+        apiKey: 'ff_test',
+        withEcdh: false,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+    ).rejects.toMatchObject({
+      code: 'ERR_INTERNAL',
+      message: 'ASL handshake network failure',
+    });
+  });
+
+  it('performAslHandshake maps non-JSON body to ERR_INTERNAL', async () => {
+    const fetchImpl = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError('Unexpected token');
+      },
+    })) as unknown as typeof fetch;
+
+    await expect(
+      performAslHandshake({
+        handshakeUrl: 'http://localhost/auth/asl-handshake',
+        apiKey: 'ff_test',
+        withEcdh: false,
+        fetchImpl,
+      }),
+    ).rejects.toMatchObject({
+      code: 'ERR_INTERNAL',
+      message: expect.stringContaining('not JSON'),
+    });
+  });
 });

@@ -140,6 +140,8 @@ describe('evaluateSdkFlag (RuleEngine wrapper)', () => {
         },
       ],
     });
+    // MultiContext = kind + user + organization only (FF-EU schema;
+    // additionalProperties: false — no top-level custom on multi).
     const weseedoContext = {
       kind: 'multi',
       user: {
@@ -156,7 +158,6 @@ describe('evaluateSdkFlag (RuleEngine wrapper)', () => {
         organization_name: 'Weseedo B.V',
         custom: { source: 'SDK' },
       },
-      custom: { source: 'SDK' },
     };
     expect(evaluateSdkFlag(flag, weseedoContext, {})).toBe(true);
 

@@ -174,7 +174,89 @@ describe('RulesStore reducer', () => {
     expect(renewed.ok).toBe(true);
     if (!renewed.ok) return;
     expect(renewed.state.flags.size).toBe(1);
+    expect(renewed.state.version).toBe(2);
+    expect(renewed.state.needsFullConfig).toBe(false);
     expect(renewed.state.expiresAt).toBe(NOW + TTL);
+  });
+
+  it('lease ahead of stored flags keeps version bookmark and asks for fullConfig', () => {
+    let state = createEmptyRulesState();
+    state = reduceRules(state, fullConfig(5, [flag('a')]), NOW).state;
+
+    const ahead = reduceRules(state, lease(9), NOW);
+    expect(ahead.ok).toBe(true);
+    if (!ahead.ok) return;
+
+    // Still on 5 so a following deltas catch-up from 5 can apply.
+    expect(ahead.state.version).toBe(5);
+    expect(ahead.state.flags.get('a')?.default_value).toBe(false);
+    expect(ahead.state.needsFullConfig).toBe(true);
+    expect(ahead.state.expiresAt).toBe(NOW + TTL);
+    expect(ahead.state.ready).toBe(true);
+
+    // Same connection: catch-up from the kept bookmark still works.
+    const catchUp = reduceRules(
+      ahead.state,
+      {
+        type: 'deltas',
+        fromVersion: 5,
+        toVersion: 9,
+        expiresAt: NOW + TTL,
+        items: [
+          delta(5, 6, [flag('a', true)]),
+          delta(6, 7, [flag('a', true)]),
+          delta(7, 8, [flag('a', true)]),
+          delta(8, 9, [flag('a', true)]),
+        ],
+        signature: 'unsigned',
+      },
+      NOW,
+    );
+    expect(catchUp.ok).toBe(true);
+    if (!catchUp.ok) return;
+    expect(catchUp.state.version).toBe(9);
+    expect(catchUp.state.needsFullConfig).toBe(false);
+  });
+
+  it('deltas envelope that does not reach toVersion is a version gap', () => {
+    let state = createEmptyRulesState();
+    state = reduceRules(state, fullConfig(1, [flag('a')]), NOW).state;
+
+    const emptyItems = reduceRules(
+      state,
+      {
+        type: 'deltas',
+        fromVersion: 1,
+        toVersion: 3,
+        expiresAt: NOW + TTL,
+        items: [],
+        signature: 'unsigned',
+      },
+      NOW,
+    );
+    expect(emptyItems.ok).toBe(false);
+    if (emptyItems.ok) return;
+    expect(emptyItems.reason).toBe('version_gap');
+    expect(emptyItems.state.version).toBe(1);
+    expect(emptyItems.state.needsFullConfig).toBe(true);
+
+    const shortChain = reduceRules(
+      state,
+      {
+        type: 'deltas',
+        fromVersion: 1,
+        toVersion: 3,
+        expiresAt: NOW + TTL,
+        items: [delta(1, 2, [flag('a', true)])],
+        signature: 'unsigned',
+      },
+      NOW,
+    );
+    expect(shortChain.ok).toBe(false);
+    if (shortChain.ok) return;
+    expect(shortChain.reason).toBe('version_gap');
+    expect(shortChain.state.version).toBe(1);
+    expect(shortChain.state.needsFullConfig).toBe(true);
   });
 
   it('expired payload marks not ready', () => {

@@ -5,6 +5,7 @@ export {
   deriveAslMacKey,
   generateAslClientKeyPair,
   parsePeerPublicKeyHex,
+  parseSaltHex,
   wipeKeyMaterial,
 } from './aslEcdh';
 export type { AslClientKeyPair, AslDerivedMac } from './aslEcdh';
