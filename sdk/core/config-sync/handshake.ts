@@ -47,13 +47,17 @@ export async function performAslHandshake(input: {
   let privateKey: Uint8Array | undefined;
 
   try {
-    const headers: Record<string, string> = { 'X-API-Key': input.apiKey };
-    let body: string | undefined;
+    const headers: Record<string, string> = {
+      'X-API-Key': input.apiKey,
+      // Always send a JSON object body. Browsers POST with null body otherwise,
+      // and FF-EU's Optional(Object) schema rejects null as "Must be of type object".
+      'Content-Type': 'application/json',
+    };
+    let body = '{}';
 
     if (input.withEcdh) {
       const pair = generateAslClientKeyPair();
       privateKey = pair.privateKey;
-      headers['Content-Type'] = 'application/json';
       body = JSON.stringify({ clientPublicKey: pair.publicKeyHex });
     }
 

@@ -196,7 +196,9 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       loadFlags: syncCache.loadCachedFlags,
       saveFlags: syncCache.saveCachedFlags,
       loadContext: syncCache.loadCachedContext,
-      saveContext: syncCache.saveCachedContext
+      saveContext: syncCache.saveCachedContext,
+      loadRulesSnapshot: syncCache.loadCachedRulesSnapshot,
+      saveRulesSnapshot: syncCache.saveCachedRulesSnapshot,
     };
 
     this.context = toJsonCloneable((options.context || ({} as C)));
@@ -268,8 +270,14 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
         if (stored) this.context = stored;
       }
 
-      // B) Cached flags
-      if (this.enableOfflineCache) {
+      // B) Config-sync rules localCache (preferred over evaluated-flag cache)
+      let hydratedRules = false;
+      if (this.configSync && this.rulesStore && this.enableOfflineCache) {
+        hydratedRules = await this.hydrateRulesFromCache();
+      }
+
+      // C) Cached evaluated flags (legacy / bootstrap when no rules snapshot)
+      if (this.enableOfflineCache && !hydratedRules) {
         const cached = await Promise.resolve(
           this.cacheAdapter.loadFlags(this.apiKey, this.cacheTTL)
         );
@@ -280,7 +288,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
         }
       }
 
-      // C) Same-origin iframe/tab share, then transport setup
+      // D) Same-origin iframe/tab share, then transport setup
       if (await this.joinConnectionShare(options)) {
         this.isInitialized = true;
         this.resolveReady();
@@ -290,12 +298,13 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       await this.setupTransport(options);
       this.shareHub?.broadcastFlags(this.flags as Record<string, T>);
 
-      // D) Mark as initialized and resolve
+      // E) Mark as initialized and resolve
       this.isInitialized = true;
       this.resolveReady();
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       logger.error('[FlagClient] Initialization failed:', error);
+
 
       // Always resolve — the app should render its fallback UI regardless of whether
       // we have cached flags or not. onError carries the reason; ready() must not throw
@@ -947,6 +956,54 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     return this.rulesStore;
   }
 
+  /**
+   * Restore rules from localCache before the stream opens.
+   * Fresh lease → reconnect with sinceVersion; expired → fullConfig.
+   */
+  private async hydrateRulesFromCache(): Promise<boolean> {
+    if (!this.rulesStore || !this.cacheAdapter.loadRulesSnapshot) {
+      return false;
+    }
+    try {
+      const snapshot = await Promise.resolve(
+        this.cacheAdapter.loadRulesSnapshot(this.apiKey),
+      );
+      if (!snapshot || !Array.isArray(snapshot.flags) || snapshot.flags.length === 0) {
+        return false;
+      }
+      this.rulesStore.hydrateFromSnapshot(snapshot);
+      this.flags = this.evaluateFromRulesStore();
+      this.notifySubscribers();
+      const store = this.rulesStore.getState();
+      logger.log(
+        `[FlagClient] Hydrated rules localCache v${store.version}` +
+          (store.needsFullConfig ? ' (expired — will request fullConfig)' : ' (will use sinceVersion)'),
+      );
+      return true;
+    } catch (err) {
+      logger.warn('[FlagClient] Failed to hydrate rules localCache:', err);
+      return false;
+    }
+  }
+
+  /** Persist rules after a successful (or expiry/gap) apply so reconnect can catch up. */
+  private persistRulesSnapshot(): void {
+    if (
+      !this.rulesStore ||
+      !this.enableOfflineCache ||
+      !this.cacheAdapter.saveRulesSnapshot
+    ) {
+      return;
+    }
+    const snapshot = this.rulesStore.toSnapshot();
+    if (snapshot.flags.length === 0) return;
+    void Promise.resolve(
+      this.cacheAdapter.saveRulesSnapshot(this.apiKey, snapshot),
+    ).catch((err) => {
+      logger.warn('[FlagClient] Failed to persist rules localCache:', err);
+    });
+  }
+
   private handleConfigSyncEvent(
     eventName: 'lease' | 'fullConfig' | 'delta' | 'deltas',
     payload: Record<string, unknown>,
@@ -968,14 +1025,18 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       }
       if (result.reason === 'version_gap') {
         logger.warn('[FlagClient] Config-sync version gap — next reconnect will request fullConfig.');
+        this.persistRulesSnapshot();
         return { publish: false };
       }
       if (result.reason === 'expired') {
         logger.warn('[FlagClient] Config-sync payload expired — fail closed to defaults.');
+        this.persistRulesSnapshot();
         return { publish: true };
       }
       return { publish: false };
     }
+
+    this.persistRulesSnapshot();
 
     const store = this.rulesStore;
     // Cold start: lease alone with empty rules — wait for fullConfig/deltas.

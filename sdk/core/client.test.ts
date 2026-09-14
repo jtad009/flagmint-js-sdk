@@ -304,7 +304,7 @@ describe('FlagClient', () => {
       'https://gateway.example/auth/asl-handshake',
       expect.objectContaining({
         method: 'POST',
-        headers: { 'X-API-Key': 'ff_test' },
+        headers: expect.objectContaining({ 'X-API-Key': 'ff_test' }),
       })
     );
     client.destroy();
@@ -446,6 +446,204 @@ describe('FlagClient', () => {
     expect(client.getFlag('demo')).toBe(true);
     client.destroy();
     expect(client.getRulesStore()!.getMacKey()).toBeNull();
+  });
+
+  it('configSync persists rules localCache and reconnects with sinceVersion', async () => {
+    const { generateKeyPairSync, createPublicKey, diffieHellman, hkdfSync } = await import(
+      'node:crypto'
+    );
+    const { signConfigPayload } = await import('./config-sync');
+
+    class MockEventSource {
+      static instances: MockEventSource[] = [];
+      url: string;
+      onerror: ((ev?: unknown) => void) | null = null;
+      private listeners = new Map<string, Set<(event: MessageEvent) => void>>();
+      constructor(url: string) {
+        this.url = url;
+        MockEventSource.instances.push(this);
+      }
+      addEventListener(type: string, listener: (event: MessageEvent) => void) {
+        if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+        this.listeners.get(type)!.add(listener);
+      }
+      removeEventListener(type: string, listener: (event: MessageEvent) => void) {
+        this.listeners.get(type)?.delete(listener);
+      }
+      close() {}
+      emit(type: string, data: unknown) {
+        const event = {
+          data: typeof data === 'string' ? data : JSON.stringify(data),
+        } as MessageEvent;
+        this.listeners.get(type)?.forEach((listener) => listener(event));
+      }
+    }
+
+    const rulesCache: { snap: import('./config-sync').RulesCacheSnapshot | null } = {
+      snap: null,
+    };
+    const cacheAdapter = {
+      loadFlags: () => null,
+      saveFlags: () => undefined,
+      loadContext: () => null,
+      saveContext: () => undefined,
+      loadRulesSnapshot: () => rulesCache.snap,
+      saveRulesSnapshot: (apiKey: string, snapshot: import('./config-sync').RulesCacheSnapshot) => {
+        expect(apiKey).toBe('ff_test');
+        rulesCache.snap = snapshot;
+      },
+    };
+
+    const handshakeFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('asl-handshake')) {
+        const body = JSON.parse(String(init?.body || '{}')) as { clientPublicKey?: string };
+        const clientRaw = Buffer.from(body.clientPublicKey!, 'hex');
+        const { publicKey, privateKey } = generateKeyPairSync('x25519');
+        const shared = diffieHellman({
+          privateKey,
+          publicKey: createPublicKey({
+            key: {
+              kty: 'OKP',
+              crv: 'X25519',
+              x: clientRaw.toString('base64url'),
+            },
+            format: 'jwk',
+          }),
+        });
+        const salt = Buffer.alloc(16, 9);
+        void Buffer.from(
+          hkdfSync('sha256', shared, salt, 'flagmint-asl-config-sync-mac-v1', 32),
+        );
+        const jwk = publicKey.export({ format: 'jwk' }) as { x?: string };
+        return jsonResponse(200, {
+          data: {
+            sessionId: 'sess-ecdh-cache',
+            serverPublicKey: Buffer.from(jwk.x!, 'base64url').toString('hex'),
+            salt: salt.toString('hex'),
+            keyAgreement: 'x25519-hkdf-sha256',
+          },
+        });
+      }
+      return jsonResponse(202, { statusCode: 202 });
+    };
+
+    // --- Cold start: no localCache → fullConfig=true, then persist ---
+    MockEventSource.instances = [];
+    global.fetch = jest.fn(handshakeFetch) as unknown as typeof fetch;
+
+    const cold = new FlagClient({
+      apiKey: 'ff_test',
+      enableFlagmint: true,
+      deferInitialization: true,
+      shareConnection: false,
+      enableOfflineCache: true,
+      configSync: true,
+      context: { user: { key: 'u1' } },
+      EventSourceImpl: MockEventSource,
+      handshakeEndpoint: 'https://gateway.example/auth/asl-handshake',
+      sseEndpoint: 'https://gateway.example/evaluator/v2/flags',
+      cacheAdapter,
+    });
+
+    const coldReady = cold.ready(500);
+    let es = MockEventSource.instances[0];
+    for (let i = 0; i < 20 && !es; i++) {
+      await Promise.resolve();
+      es = MockEventSource.instances[0];
+    }
+    expect(es).toBeDefined();
+    expect(new URL(es!.url).searchParams.get('fullConfig')).toBe('true');
+
+    const mac = cold.getRulesStore()!.getMacKey()!;
+    const expiresAt = Date.now() + 60_000;
+    const leaseBody = {
+      type: 'lease' as const,
+      version: 4,
+      serverNow: Date.now(),
+      expiresAt,
+    };
+    const fullBody = {
+      type: 'fullConfig' as const,
+      version: 4,
+      compiledAt: Date.now(),
+      expiresAt,
+      flags: [
+        {
+          key: 'demo',
+          type: 'boolean' as const,
+          is_active: true,
+          default_value: true,
+          targeting_rules: [],
+          variations: [
+            { id: 'on', value: true },
+            { id: 'off', value: false },
+          ],
+          rollouts: {},
+          analytics_enabled: true,
+        },
+      ],
+      segments: {},
+    };
+    es!.emit('connected', { connectionId: 'conn-1' });
+    es!.emit('lease', { ...leaseBody, signature: signConfigPayload(leaseBody, mac) });
+    es!.emit('fullConfig', { ...fullBody, signature: signConfigPayload(fullBody, mac) });
+    await coldReady;
+    expect(cold.getFlag('demo')).toBe(true);
+    expect(rulesCache.snap?.version).toBe(4);
+    expect(rulesCache.snap?.flags).toHaveLength(1);
+    cold.destroy();
+
+    // --- Warm start: hydrate localCache → sinceVersion=4 ---
+    MockEventSource.instances = [];
+    global.fetch = jest.fn(handshakeFetch) as unknown as typeof fetch;
+
+    const warm = new FlagClient({
+      apiKey: 'ff_test',
+      enableFlagmint: true,
+      deferInitialization: true,
+      shareConnection: false,
+      enableOfflineCache: true,
+      configSync: true,
+      context: { user: { key: 'u1' } },
+      EventSourceImpl: MockEventSource,
+      handshakeEndpoint: 'https://gateway.example/auth/asl-handshake',
+      sseEndpoint: 'https://gateway.example/evaluator/v2/flags',
+      cacheAdapter,
+    });
+
+    const warmReady = warm.ready(500);
+    // Hydration is sync from cache before EventSource; flag available immediately after microtasks.
+    for (let i = 0; i < 10; i++) {
+      await Promise.resolve();
+      if (warm.getRulesStore()?.getState().version === 4) break;
+    }
+    expect(warm.getRulesStore()?.getState().version).toBe(4);
+    expect(warm.getFlag('demo')).toBe(true);
+
+    es = MockEventSource.instances[0];
+    for (let i = 0; i < 20 && !es; i++) {
+      await Promise.resolve();
+      es = MockEventSource.instances[0];
+    }
+    expect(es).toBeDefined();
+    const warmUrl = new URL(es!.url);
+    expect(warmUrl.searchParams.get('fullConfig')).toBe('false');
+    expect(warmUrl.searchParams.get('sinceVersion')).toBe('4');
+
+    const warmMac = warm.getRulesStore()!.getMacKey()!;
+    const warmLease = {
+      type: 'lease' as const,
+      version: 4,
+      serverNow: Date.now(),
+      expiresAt: Date.now() + 60_000,
+    };
+    es!.emit('connected', { connectionId: 'conn-2' });
+    es!.emit('lease', {
+      ...warmLease,
+      signature: signConfigPayload(warmLease, warmMac),
+    });
+    await warmReady;
+    warm.destroy();
   });
 
   it('does not overwrite cached flags when long-polling has no snapshot yet', async () => {

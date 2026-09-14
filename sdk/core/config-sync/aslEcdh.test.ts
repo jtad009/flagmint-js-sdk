@@ -133,7 +133,10 @@ describe('ASL ECDH + MAC verify', () => {
 
   it('performAslHandshake stays legacy without ECDH', async () => {
     const fetchImpl = jest.fn(async (_url: string, init?: RequestInit) => {
-      expect(init?.body).toBeUndefined();
+      expect(init?.body).toBe('{}');
+      expect((init?.headers as Record<string, string>)?.['Content-Type']).toBe(
+        'application/json',
+      );
       return {
         ok: true,
         status: 200,
