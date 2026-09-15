@@ -254,10 +254,18 @@ export class SseTransport<C, T> implements Transport<C, T> {
 
   private logLifecycleDisconnected(
     reason: string,
-    extra?: { retryInMs?: number },
+    extra?: { retryInMs?: number; allowPreConnection?: boolean },
   ): void {
     const connectionId = this.connectionId;
-    if (!connectionId && this.connectedAtMs == null) return;
+    // Ordinary teardown with no established connection is silent; explicit
+    // pre-connection failures (e.g. initial_connect_failed) still log.
+    if (
+      !connectionId &&
+      this.connectedAtMs == null &&
+      !extra?.allowPreConnection
+    ) {
+      return;
+    }
 
     const upMs =
       this.connectedAtMs != null ? Date.now() - this.connectedAtMs : null;
@@ -629,7 +637,9 @@ export class SseTransport<C, T> implements Transport<C, T> {
           }
 
           if (this.connectReject && !this.initialFlagsReceived) {
-            this.logLifecycleDisconnected('initial_connect_failed');
+            this.logLifecycleDisconnected('initial_connect_failed', {
+              allowPreConnection: true,
+            });
             const err = new Error('Initial SSE connection stream setup rejected by infrastructure gateway.');
             this.cleanupEventSource();
             reject(err);

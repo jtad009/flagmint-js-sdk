@@ -652,6 +652,40 @@ describe('SseTransport', () => {
     logger.setup({ debugLog: false });
   });
 
+  it('logs initial_connect_failed with connectionId=none when error precedes connected', async () => {
+    const { logger } = await import('@/core/helpers/logger');
+    logger.setup({ debugLog: true });
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    const transport = new SseTransport<Record<string, any>, unknown>(
+      'http://api.flagmint.test/evaluator/v2/flags',
+      'sess-1',
+      { user: { key: 'u1' } },
+      async () => 'sess-2',
+      {
+        apiKey: 'ff_test',
+        EventSourceImpl: MockEventSource,
+      },
+    );
+
+    const initPromise = transport.init();
+    const es = MockEventSource.instances[0];
+    es.onerror?.(new Event('error'));
+
+    await expect(initPromise).rejects.toThrow(/Initial SSE connection/);
+
+    const failLine = logSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((line) => line.includes('reason=initial_connect_failed'));
+    expect(failLine).toBeDefined();
+    expect(failLine).toContain('connectionId=none');
+    expect(failLine).toContain('upMs=n/a');
+
+    transport.destroy();
+    logSpy.mockRestore();
+    logger.setup({ debugLog: false });
+  });
+
   it('does not emit SSE lifecycle lines when debugLog is off', async () => {
     const { logger } = await import('@/core/helpers/logger');
     logger.setup({ debugLog: false });
