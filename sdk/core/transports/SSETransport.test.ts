@@ -479,4 +479,232 @@ describe('SseTransport', () => {
 
     transport.destroy();
   });
+
+  it('config sync opens with fullConfig and applies lease + fullConfig', async () => {
+    const applied: string[] = [];
+    let flags: Record<string, unknown> = {};
+    const transport = new SseTransport<Record<string, any>, unknown>(
+      'http://api.flagmint.test/evaluator/v2/flags',
+      'sess-cfg',
+      { user: { key: 'u1' } },
+      undefined,
+      {
+        apiKey: 'ff_test',
+        EventSourceImpl: MockEventSource,
+        configSync: true,
+        contextAsTelemetry: true,
+        getConfigSyncParams: () => ({ wantFullConfig: true }),
+        onConfigSyncEvent: (eventName) => {
+          applied.push(eventName);
+          if (eventName === 'lease') return { publish: false };
+          flags = { demo: true };
+          return { publish: true };
+        },
+        getEvaluatedFlags: () => flags,
+        getAnalyticsMap: () => ({ demo: true }),
+      },
+    );
+
+    const analytics: Record<string, boolean>[] = [];
+    transport.onAnalyticsUpdated((map) => analytics.push(map));
+
+    const initPromise = transport.init();
+    const es = MockEventSource.instances[0];
+    const parsed = new URL(es.url);
+    expect(parsed.searchParams.get('fullConfig')).toBe('true');
+    expect(parsed.searchParams.get('sinceVersion')).toBeNull();
+
+    es.emit('connected', { connectionId: 'conn-cfg' });
+    es.emit('lease', { type: 'lease', version: 1, expiresAt: Date.now() + 60_000, signature: 'x' });
+    es.emit('fullConfig', {
+      type: 'fullConfig',
+      version: 1,
+      flags: [{ key: 'demo' }],
+      signature: 'y',
+    });
+    await initPromise;
+
+    expect(applied).toEqual(['lease', 'fullConfig']);
+    await expect(
+      transport.fetchFlags({ user: { key: 'u2' } }),
+    ).resolves.toEqual({ demo: true });
+    expect(global.fetch).toHaveBeenCalledWith(
+      'http://api.flagmint.test/evaluator/v2/flags/context',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(analytics.at(-1)).toEqual({ demo: true });
+
+    transport.destroy();
+  });
+
+  it('config sync evaluates locally during reconnect without an active connectionId', async () => {
+    const fetchMock = global.fetch as jest.Mock;
+    fetchMock.mockClear();
+
+    const transport = new SseTransport<Record<string, any>, unknown>(
+      'http://api.flagmint.test/evaluator/v2/flags',
+      'sess-cfg',
+      { user: { key: 'u1' } },
+      undefined,
+      {
+        apiKey: 'ff_test',
+        EventSourceImpl: MockEventSource,
+        configSync: true,
+        contextAsTelemetry: true,
+        getConfigSyncParams: () => ({ wantFullConfig: true }),
+        onConfigSyncEvent: () => ({ publish: true }),
+        getEvaluatedFlags: (ctx) => ({
+          demo: (ctx as { user?: { key?: string } })?.user?.key === 'after-blip',
+        }),
+      },
+    );
+
+    const initPromise = transport.init();
+    const es = MockEventSource.instances[0];
+    es.emit('connected', { connectionId: 'conn-cfg' });
+    es.emit('fullConfig', {
+      type: 'fullConfig',
+      version: 1,
+      flags: [{ key: 'demo' }],
+      signature: 'y',
+    });
+    await initPromise;
+
+    // Simulate mid-reconnect: stream torn down, connectionId cleared.
+    (transport as any).cleanupEventSource();
+    expect((transport as any).connectionId).toBeNull();
+
+    await expect(
+      transport.fetchFlags({ user: { key: 'after-blip' } }),
+    ).resolves.toEqual({ demo: true });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    transport.destroy();
+  });
+
+  it('config sync reconnect catch-up uses sinceVersion', async () => {
+    const transport = new SseTransport<Record<string, any>, unknown>(
+      'http://api.flagmint.test/evaluator/v2/flags',
+      'sess-cfg',
+      { user: { key: 'u1' } },
+      undefined,
+      {
+        apiKey: 'ff_test',
+        EventSourceImpl: MockEventSource,
+        configSync: true,
+        getConfigSyncParams: () => ({ wantFullConfig: false, sinceVersion: 9 }),
+        onConfigSyncEvent: () => ({ publish: true }),
+        getEvaluatedFlags: () => ({ demo: false }),
+      },
+    );
+
+    const initPromise = transport.init();
+    const es = MockEventSource.instances[0];
+    expect(new URL(es.url).searchParams.get('fullConfig')).toBe('false');
+    expect(new URL(es.url).searchParams.get('sinceVersion')).toBe('9');
+    es.emit('connected', { connectionId: 'conn-cfg' });
+    es.emit('lease', { type: 'lease', version: 9, signature: 'x' });
+    await initPromise;
+    transport.destroy();
+  });
+
+  it('logs SSE lifecycle lines when debugLog is enabled', async () => {
+    const { logger } = await import('@/core/helpers/logger');
+    logger.setup({ debugLog: true });
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    const refresh = jest.fn(async () => 'sess-2');
+    const transport = new SseTransport<Record<string, any>, unknown>(
+      'http://api.flagmint.test/evaluator/v2/flags',
+      'sess-1',
+      { user: { key: 'u1' } },
+      refresh,
+      {
+        apiKey: 'ff_test',
+        EventSourceImpl: MockEventSource,
+      },
+    );
+
+    const initPromise = transport.init();
+    const es = MockEventSource.instances[0];
+    es.emit('connected', { connectionId: 'conn-life-1' });
+    es.emit('flags', { flags: { demo: true } });
+    await initPromise;
+
+    expect(logSpy.mock.calls.some((c) => String(c[0]).includes('connected connectionId=conn-life-1'))).toBe(
+      true,
+    );
+
+    es.onerror?.(new Event('error'));
+    await flush();
+
+    const disconnectLine = logSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((line) => line.includes('disconnected') && line.includes('conn-life-1'));
+    expect(disconnectLine).toBeDefined();
+    expect(disconnectLine).toContain('reason=network_error');
+    expect(disconnectLine).toMatch(/upMs=\d+/);
+    expect(disconnectLine).toContain('retryInMs=');
+
+    transport.destroy();
+    logSpy.mockRestore();
+    logger.setup({ debugLog: false });
+  });
+
+  it('logs initial_connect_failed with connectionId=none when error precedes connected', async () => {
+    const { logger } = await import('@/core/helpers/logger');
+    logger.setup({ debugLog: true });
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    const transport = new SseTransport<Record<string, any>, unknown>(
+      'http://api.flagmint.test/evaluator/v2/flags',
+      'sess-1',
+      { user: { key: 'u1' } },
+      async () => 'sess-2',
+      {
+        apiKey: 'ff_test',
+        EventSourceImpl: MockEventSource,
+      },
+    );
+
+    const initPromise = transport.init();
+    const es = MockEventSource.instances[0];
+    es.onerror?.(new Event('error'));
+
+    await expect(initPromise).rejects.toThrow(/Initial SSE connection/);
+
+    const failLine = logSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((line) => line.includes('reason=initial_connect_failed'));
+    expect(failLine).toBeDefined();
+    expect(failLine).toContain('connectionId=none');
+    expect(failLine).toContain('upMs=n/a');
+
+    transport.destroy();
+    logSpy.mockRestore();
+    logger.setup({ debugLog: false });
+  });
+
+  it('does not emit SSE lifecycle lines when debugLog is off', async () => {
+    const { logger } = await import('@/core/helpers/logger');
+    logger.setup({ debugLog: false });
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    const { transport, es } = await openStream();
+    es.onerror?.(new Event('error'));
+    await flush();
+
+    const lifecycle = logSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter(
+        (line) =>
+          line.includes('connected connectionId=') ||
+          line.includes('disconnected connectionId='),
+      );
+    expect(lifecycle).toHaveLength(0);
+
+    transport.destroy();
+    logSpy.mockRestore();
+  });
 });

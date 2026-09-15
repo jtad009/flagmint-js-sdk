@@ -21,6 +21,15 @@ import {
   userKeyFromContext,
   type ApplicationEvent,
 } from '@/core/helpers/applicationEvents';
+import {
+  RulesStore,
+  performAslHandshake,
+  wipeKeyMaterial,
+  evaluateAllSdkFlags,
+  evaluateSdkFlag,
+  coerceType,
+  type ConfigSyncPayload,
+} from '@/core/config-sync';
 
 type TransportMode = 'auto' | 'long-polling' | 'sse';
 
@@ -31,6 +40,14 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
   persistContext?: boolean;
   transport?: Transport<C, any>;
   transportMode?: TransportMode;
+  /**
+   * Enable SDK config-sync (local evaluation path).
+   * Performs X25519 ECDH on ASL handshake and derives a session MAC key used
+   * to verify signed `lease` / `fullConfig` / `delta` payloads.
+   * Default false — keeps the legacy evaluated-flags stream.
+   * When true, `shareConnection` defaults to false (rules are not shared across tabs yet).
+   */
+  configSync?: boolean;
   /**
    * Called when a non-fatal but noteworthy error occurs during or after initialization.
    * The client always resolves ready() regardless — use this to show a degraded/fallback UI.
@@ -53,7 +70,7 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
   sseEndpoint?: string;
   /** Override the ASL handshake URL. Use with `sseEndpoint` for self-hosted gateways. */
   handshakeEndpoint?: string;
-  debugLog?: boolean; // this option should be true, if a user wants access to flagmint internal logs
+  debugLog?: boolean; // opt-in SDK logs, including SSE connected/disconnected lifecycle (connectionId, upMs)
   env?: string;
   enableFlagmint: boolean; // this is used to trigger connection to Flagmint service. This prevents connection when in dev and reduced billing.
   wrapperInfo?: {
@@ -157,6 +174,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   private subscribers: Set<FlagUpdateCallback<T>> = new Set();
   private shareHub: ConnectionShareHub<C, T> | null = null;
   private shareConnection: boolean;
+  private configSync: boolean;
+  private rulesStore: RulesStore | null = null;
 
   /**
    * Creates a new FlagClient instance.
@@ -177,7 +196,9 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       loadFlags: syncCache.loadCachedFlags,
       saveFlags: syncCache.saveCachedFlags,
       loadContext: syncCache.loadCachedContext,
-      saveContext: syncCache.saveCachedContext
+      saveContext: syncCache.saveCachedContext,
+      loadRulesSnapshot: syncCache.loadCachedRulesSnapshot,
+      saveRulesSnapshot: syncCache.saveCachedRulesSnapshot,
     };
 
     this.context = toJsonCloneable((options.context || ({} as C)));
@@ -186,8 +207,15 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     this.deferInitialization = options.deferInitialization ?? false;
     this.env = options.env;
     this.enableFlagmint = options.enableFlagmint ?? true;
+    this.configSync = options.configSync ?? false;
+    // Config-sync local eval needs a rules store + ECDH on this document.
+    // Connection sharing is off by default until rules snapshots are shared.
     this.shareConnection =
-      options.shareConnection ?? isConnectionSharingAvailable();
+      options.shareConnection ??
+      (this.configSync ? false : isConnectionSharingAvailable());
+    if (this.configSync) {
+      this.rulesStore = new RulesStore();
+    }
 
     logger.setup({ debugLog: options.debugLog });
 
@@ -242,8 +270,14 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
         if (stored) this.context = stored;
       }
 
-      // B) Cached flags
-      if (this.enableOfflineCache) {
+      // B) Config-sync rules localCache (preferred over evaluated-flag cache)
+      let hydratedRules = false;
+      if (this.configSync && this.rulesStore && this.enableOfflineCache) {
+        hydratedRules = await this.hydrateRulesFromCache();
+      }
+
+      // C) Cached evaluated flags (legacy / bootstrap when no rules snapshot)
+      if (this.enableOfflineCache && !hydratedRules) {
         const cached = await Promise.resolve(
           this.cacheAdapter.loadFlags(this.apiKey, this.cacheTTL)
         );
@@ -254,7 +288,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
         }
       }
 
-      // C) Same-origin iframe/tab share, then transport setup
+      // D) Same-origin iframe/tab share, then transport setup
       if (await this.joinConnectionShare(options)) {
         this.isInitialized = true;
         this.resolveReady();
@@ -264,12 +298,13 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       await this.setupTransport(options);
       this.shareHub?.broadcastFlags(this.flags as Record<string, T>);
 
-      // D) Mark as initialized and resolve
+      // E) Mark as initialized and resolve
       this.isInitialized = true;
       this.resolveReady();
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       logger.error('[FlagClient] Initialization failed:', error);
+
 
       // Always resolve — the app should render its fallback UI regardless of whether
       // we have cached flags or not. onError carries the reason; ready() must not throw
@@ -349,8 +384,17 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
   private attachShareLeader(): void {
     this.shareHub?.setLeaderContextHandler(async (context, options) => {
-      const mergedContext = { ...this.context, ...context } as C;
+      const mergedContext = toJsonCloneable({ ...this.context, ...context } as C);
+      if (options?.persist === true) {
+        this.context = mergedContext;
+        if (this.initializationOptions) {
+          this.initializationOptions.context = mergedContext;
+        }
+      }
       if (!this.transport || typeof this.transport.fetchFlags !== 'function') {
+        if (this.configSync && this.rulesStore) {
+          return this.evaluateFromRulesStore(mergedContext) as Record<string, T>;
+        }
         return this.flags as Record<string, T>;
       }
       return this.transport.fetchFlags(mergedContext, {
@@ -403,6 +447,12 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
     const mode = options.transportMode ?? 'auto';
 
+    if (this.configSync && mode === 'long-polling') {
+      logger.warn(
+        '[FlagClient] configSync requires SSE streaming; ignoring transportMode=long-polling.',
+      );
+    }
+
     const sessionId = await this.fetchFreshSessionId(options.apiKey)
     if (!sessionId) {
       throw new Error('Handshake parsing error: Remote platform returned empty identity session token strings.');
@@ -422,7 +472,26 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
         {
           apiKey: options.apiKey,
           wrapper: options.wrapperInfo,
-          EventSourceImpl: options.EventSourceImpl
+          EventSourceImpl: options.EventSourceImpl,
+          ...(this.configSync && this.rulesStore
+            ? {
+                configSync: true,
+                contextAsTelemetry: true,
+                getConfigSyncParams: () => {
+                  const store = this.rulesStore!;
+                  const wantFull = store.wantsFullConfig();
+                  return {
+                    wantFullConfig: wantFull,
+                    sinceVersion: wantFull ? undefined : store.sinceVersion(),
+                  };
+                },
+                onConfigSyncEvent: (eventName, payload) =>
+                  this.handleConfigSyncEvent(eventName, payload),
+                getEvaluatedFlags: (ctx) =>
+                  this.evaluateFromRulesStore(ctx ?? this.context),
+                getAnalyticsMap: () => this.analyticsMapFromRulesStore(),
+              }
+            : {}),
         }
       );
       bindTransport(sse);
@@ -456,7 +525,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       return lp;
     };
 
-    if (mode === 'sse') {
+    if (mode === 'sse' || this.configSync) {
       this.transport = await useSSE();
     } else if (mode === 'long-polling') {
       this.transport = useLongPolling();
@@ -537,6 +606,13 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    * Get all flags.
    */
   getFlags(): FeatureFlags<T> {
+    if (this.configSync && this.rulesStore) {
+      // Followers (or pre-bootstrap) have no local rules — use last published map.
+      if (this.rulesStore.getState().flags.size === 0) {
+        return { ...this.flags };
+      }
+      return this.evaluateFromRulesStore();
+    }
     return { ...this.flags };
   }
 
@@ -544,6 +620,25 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    * Get a single flag value.
    */
   getFlag<K extends keyof FeatureFlags<T>>(key: K, fallback?: FeatureFlags<T>[K]): FeatureFlags<T>[K] {
+    if (this.configSync && this.rulesStore) {
+      const flag = this.rulesStore.getFlag(String(key));
+      if (!flag) {
+        return this.flags[key] ?? fallback!;
+      }
+      if (!this.rulesStore.isReady()) {
+        return (
+          (coerceType(flag.default_value, flag.type) as FeatureFlags<T>[K]) ??
+          fallback!
+        );
+      }
+      return (
+        (evaluateSdkFlag(
+          flag,
+          this.context as Record<string, unknown>,
+          this.rulesStore.getState().segments,
+        ) as FeatureFlags<T>[K]) ?? fallback!
+      );
+    }
     return this.flags[key] ?? fallback!;
   }
 
@@ -646,6 +741,10 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     }
     this.shareHub?.destroy();
     this.shareHub = null;
+    if (this.rulesStore) {
+      wipeKeyMaterial(this.rulesStore.getMacKey() ?? undefined);
+      this.rulesStore.setMacKey(null);
+    }
   }
 
   /**
@@ -825,45 +924,154 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
    * @throws {Error} If the handshake response does not contain a valid session ID.
    */
   private async fetchFreshSessionId(apiKey: string): Promise<string> {
-    const abortController = new AbortController();
-    const abortId = setTimeout(() => abortController.abort(), HANDSHAKE_TIMEOUT_MS);
     try {
-      const authenticationHandShake = await fetch(this.aslHandshakeUrl, {
-        method: 'POST',
-        headers: { 'X-API-Key': apiKey },
-        signal: abortController.signal,
+      const result = await performAslHandshake({
+        handshakeUrl: this.aslHandshakeUrl,
+        apiKey,
+        withEcdh: this.configSync,
+        timeoutMs: HANDSHAKE_TIMEOUT_MS,
       });
 
-      if (authenticationHandShake.status === 401) {
-        throw sdkError('Invalid API credentials configuration.', 'ERR_AUTH');
-      }
-      if (authenticationHandShake.status === 429) {
-        throw sdkError('Client ingestion limits exceeded.', 'ERR_RATE_LIMITED');
-      }
-      if (!authenticationHandShake.ok) {
-        throw sdkError(
-          `Handshake server infrastructure exception (${authenticationHandShake.status})`,
-          'ERR_INTERNAL',
-          { statusCode: authenticationHandShake.status }
-        );
+      if (this.configSync && this.rulesStore) {
+        wipeKeyMaterial(this.rulesStore.getMacKey() ?? undefined);
+        this.rulesStore.setMacKey(result.configMacKey ?? null);
+        if (!result.configMacKey) {
+          throw sdkError(
+            'Config sync handshake did not derive a MAC key.',
+            'ERR_HANDSHAKE',
+          );
+        }
+        logger.log('[FlagClient] ASL ECDH complete; config-sync MAC key derived.');
       }
 
-      const handshakeData = await authenticationHandShake.json();
-      const sessionId = handshakeData?.data?.sessionId;
-
-      if (typeof sessionId !== 'string' || !sessionId) {
-        throw sdkError(
-          'Handshake parsing error: Remote platform returned empty session token.',
-          'ERR_INTERNAL'
-        );
-      }
-
-      return sessionId;
+      return result.sessionId;
     } catch (err) {
       logger.error('[FlagClient] Core Handshake failure encountered:', (err as Error).message);
       throw err;
-    } finally {
-      clearTimeout(abortId);
     }
+  }
+
+  /** Config-sync rules store (null when `configSync` is false). */
+  getRulesStore(): RulesStore | null {
+    return this.rulesStore;
+  }
+
+  /**
+   * Restore rules from localCache before the stream opens.
+   * Fresh lease → reconnect with sinceVersion; expired → fullConfig.
+   */
+  private async hydrateRulesFromCache(): Promise<boolean> {
+    if (!this.rulesStore || !this.cacheAdapter.loadRulesSnapshot) {
+      return false;
+    }
+    try {
+      const snapshot = await Promise.resolve(
+        this.cacheAdapter.loadRulesSnapshot(this.apiKey),
+      );
+      if (!snapshot || !Array.isArray(snapshot.flags) || snapshot.flags.length === 0) {
+        return false;
+      }
+      this.rulesStore.hydrateFromSnapshot(snapshot);
+      this.flags = this.evaluateFromRulesStore();
+      this.notifySubscribers();
+      const store = this.rulesStore.getState();
+      logger.log(
+        `[FlagClient] Hydrated rules localCache v${store.version}` +
+          (store.needsFullConfig ? ' (expired — will request fullConfig)' : ' (will use sinceVersion)'),
+      );
+      return true;
+    } catch (err) {
+      logger.warn('[FlagClient] Failed to hydrate rules localCache:', err);
+      return false;
+    }
+  }
+
+  /** Persist rules after a successful (or expiry/gap) apply so reconnect can catch up. */
+  private persistRulesSnapshot(): void {
+    if (
+      !this.rulesStore ||
+      !this.enableOfflineCache ||
+      !this.cacheAdapter.saveRulesSnapshot
+    ) {
+      return;
+    }
+    const snapshot = this.rulesStore.toSnapshot();
+    if (snapshot.flags.length === 0) return;
+    void Promise.resolve(
+      this.cacheAdapter.saveRulesSnapshot(this.apiKey, snapshot),
+    ).catch((err) => {
+      logger.warn('[FlagClient] Failed to persist rules localCache:', err);
+    });
+  }
+
+  private handleConfigSyncEvent(
+    eventName: 'lease' | 'fullConfig' | 'delta' | 'deltas',
+    payload: Record<string, unknown>,
+  ): { publish: boolean } {
+    if (!this.rulesStore) return { publish: false };
+
+    const typed = { ...payload, type: payload.type ?? eventName } as ConfigSyncPayload;
+    const result = this.rulesStore.applySigned(typed);
+
+    if (!result.ok) {
+      if (result.reason === 'bad_signature') {
+        const err = sdkError(
+          `Config-sync ${eventName} failed MAC verification.`,
+          'ERR_CONFIG_SYNC',
+        );
+        logger.error('[FlagClient]', err.message);
+        this.onError?.(err);
+        return { publish: false };
+      }
+      if (result.reason === 'version_gap') {
+        logger.warn('[FlagClient] Config-sync version gap — next reconnect will request fullConfig.');
+        this.persistRulesSnapshot();
+        return { publish: false };
+      }
+      if (result.reason === 'expired') {
+        logger.warn('[FlagClient] Config-sync payload expired — fail closed to defaults.');
+        this.persistRulesSnapshot();
+        return { publish: true };
+      }
+      return { publish: false };
+    }
+
+    this.persistRulesSnapshot();
+
+    const store = this.rulesStore;
+    // Cold start: lease alone with empty rules — wait for fullConfig/deltas.
+    if (
+      eventName === 'lease' &&
+      store.getState().flags.size === 0 &&
+      store.getState().needsFullConfig
+    ) {
+      return { publish: false };
+    }
+
+    return { publish: true };
+  }
+
+  private evaluateFromRulesStore(context?: C): FeatureFlags<T> {
+    if (!this.rulesStore) return {};
+    const state = this.rulesStore.getState();
+    if (state.flags.size === 0) {
+      return { ...this.flags };
+    }
+    const failClosed = !this.rulesStore.isReady();
+    return evaluateAllSdkFlags<T>(
+      state.flags,
+      (context ?? this.context) as Record<string, unknown>,
+      state.segments,
+      { failClosedDefaultsOnly: failClosed },
+    );
+  }
+
+  private analyticsMapFromRulesStore(): Record<string, boolean> {
+    if (!this.rulesStore) return {};
+    const map: Record<string, boolean> = {};
+    for (const [key, flag] of this.rulesStore.getState().flags) {
+      map[key] = flag.analytics_enabled !== false;
+    }
+    return map;
   }
 }
