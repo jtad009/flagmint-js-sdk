@@ -137,6 +137,8 @@ export class SseTransport<C, T> implements Transport<C, T> {
   private reconnectAttempts = 0;
   private terminalClose = false;
   private contextUpdateQueue: Promise<void> = Promise.resolve();
+  /** Wall time when the current SSE `connected` event was received (debug lifecycle). */
+  private connectedAtMs: number | null = null;
 
   constructor(
     private endpoint: string,
@@ -226,6 +228,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
   destroy(): void {
     logger.log('[SseTransport] Initiating clean class resource teardown...');
     this.terminalClose = true;
+    this.logLifecycleDisconnected('client_destroy');
     this.cleanupEventSource();
     this.flags = {};
     this.onFlagsUpdatedCallback = undefined;
@@ -233,6 +236,42 @@ export class SseTransport<C, T> implements Transport<C, T> {
     this.onErrorCallback = undefined;
     this.resetInitialResolvers();
     this.nextFlagsResolve = null;
+  }
+
+  /**
+   * Opt-in SSE lifecycle lines (`FlagClient` `debugLog: true`).
+   * Example: `[SseTransport] disconnected connectionId=… upMs=900012 reason=network_error retryInMs=1500`
+   */
+  private logLifecycle(message: string): void {
+    if (!logger.canDebugLog) return;
+    logger.log(message);
+  }
+
+  private logLifecycleConnected(connectionId: string): void {
+    this.connectedAtMs = Date.now();
+    this.logLifecycle(`[SseTransport] connected connectionId=${connectionId}`);
+  }
+
+  private logLifecycleDisconnected(
+    reason: string,
+    extra?: { retryInMs?: number },
+  ): void {
+    const connectionId = this.connectionId;
+    if (!connectionId && this.connectedAtMs == null) return;
+
+    const upMs =
+      this.connectedAtMs != null ? Date.now() - this.connectedAtMs : null;
+    const parts = [
+      '[SseTransport] disconnected',
+      `connectionId=${connectionId ?? 'none'}`,
+      `upMs=${upMs ?? 'n/a'}`,
+      `reason=${reason}`,
+    ];
+    if (typeof extra?.retryInMs === 'number') {
+      parts.push(`retryInMs=${extra.retryInMs}`);
+    }
+    this.logLifecycle(parts.join(' '));
+    this.connectedAtMs = null;
   }
 
   private get apiKey(): string {
@@ -433,6 +472,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
     );
 
     this.terminalClose = true;
+    this.logLifecycleDisconnected('quota_exceeded');
 
     if (!hadInitialFlags && !hasCachedFlags) {
       this.emitError(err, { rejectInit: true });
@@ -588,16 +628,15 @@ export class SseTransport<C, T> implements Transport<C, T> {
             return;
           }
 
-          logger.error('[SseTransport] Native network pipeline alert layer triggered.');
-
           if (this.connectReject && !this.initialFlagsReceived) {
+            this.logLifecycleDisconnected('initial_connect_failed');
             const err = new Error('Initial SSE connection stream setup rejected by infrastructure gateway.');
             this.cleanupEventSource();
             reject(err);
             return;
           }
 
-          this.scheduleActiveReconnection();
+          this.scheduleActiveReconnection('network_error');
         };
       }
     });
@@ -605,7 +644,9 @@ export class SseTransport<C, T> implements Transport<C, T> {
     return this.connectPromise;
   }
 
-  private scheduleActiveReconnection(): void {
+  private scheduleActiveReconnection(
+    reason: string = 'network_error',
+  ): void {
     if (this.terminalClose) return;
 
     if (this.reconnectTimeoutId) clearTimeout(this.reconnectTimeoutId);
@@ -613,21 +654,23 @@ export class SseTransport<C, T> implements Transport<C, T> {
     this.reconnectAttempts++;
     const backoffDelay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), MAX_RECONNECT_DELAY_MS);
 
-    logger.log(`[SseTransport] Disconnected. Scheduling retry #${this.reconnectAttempts} in ${backoffDelay}ms...`);
+    this.logLifecycleDisconnected(reason, { retryInMs: backoffDelay });
 
     this.cleanupEventSource();
 
     this.reconnectTimeoutId = setTimeout(async () => {
       try {
         if (this.refreshTokenCallback) {
-          logger.log('[SseTransport] Refreshing single-use token credentials before reconnection...');
+          this.logLifecycle(
+            '[SseTransport] Refreshing single-use token credentials before reconnection...',
+          );
           this.sessionId = await this.refreshTokenCallback();
         }
 
         await this.connect();
       } catch (err) {
         logger.warn('[SseTransport] Reconnection attempt failed. Waiting for next cycle.');
-        this.scheduleActiveReconnection();
+        this.scheduleActiveReconnection('reconnect_failed');
       }
     }, backoffDelay);
   }
@@ -640,7 +683,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
           throw new Error('SSE `connected` event did not carry a connectionId.');
         }
         this.connectionId = payload.connectionId;
-        logger.log(`[SseTransport] Stream channel synchronized with remote identifier: ${this.connectionId}`);
+        this.logLifecycleConnected(this.connectionId);
 
         this.reconnectAttempts = 0;
         this.connectResolve = null;
@@ -740,11 +783,13 @@ export class SseTransport<C, T> implements Transport<C, T> {
       const retryable = errorCode === 'session_id_missing' || errorCode === 'internal_error';
       this.terminalClose = !retryable;
       this.emitError(err, { rejectInit: !this.initialFlagsReceived });
-      this.cleanupEventSource();
 
       if (retryable && this.initialFlagsReceived) {
         this.terminalClose = false;
-        this.scheduleActiveReconnection();
+        this.scheduleActiveReconnection(`stream_error:${errorCode}`);
+      } else {
+        this.logLifecycleDisconnected(`stream_error:${errorCode}`);
+        this.cleanupEventSource();
       }
     };
   }

@@ -70,7 +70,7 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
   sseEndpoint?: string;
   /** Override the ASL handshake URL. Use with `sseEndpoint` for self-hosted gateways. */
   handshakeEndpoint?: string;
-  debugLog?: boolean; // this option should be true, if a user wants access to flagmint internal logs
+  debugLog?: boolean; // opt-in SDK logs, including SSE connected/disconnected lifecycle (connectionId, upMs)
   env?: string;
   enableFlagmint: boolean; // this is used to trigger connection to Flagmint service. This prevents connection when in dev and reduced billing.
   wrapperInfo?: {

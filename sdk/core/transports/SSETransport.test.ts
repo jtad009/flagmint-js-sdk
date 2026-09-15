@@ -608,4 +608,69 @@ describe('SseTransport', () => {
     await initPromise;
     transport.destroy();
   });
+
+  it('logs SSE lifecycle lines when debugLog is enabled', async () => {
+    const { logger } = await import('@/core/helpers/logger');
+    logger.setup({ debugLog: true });
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    const refresh = jest.fn(async () => 'sess-2');
+    const transport = new SseTransport<Record<string, any>, unknown>(
+      'http://api.flagmint.test/evaluator/v2/flags',
+      'sess-1',
+      { user: { key: 'u1' } },
+      refresh,
+      {
+        apiKey: 'ff_test',
+        EventSourceImpl: MockEventSource,
+      },
+    );
+
+    const initPromise = transport.init();
+    const es = MockEventSource.instances[0];
+    es.emit('connected', { connectionId: 'conn-life-1' });
+    es.emit('flags', { flags: { demo: true } });
+    await initPromise;
+
+    expect(logSpy.mock.calls.some((c) => String(c[0]).includes('connected connectionId=conn-life-1'))).toBe(
+      true,
+    );
+
+    es.onerror?.(new Event('error'));
+    await flush();
+
+    const disconnectLine = logSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((line) => line.includes('disconnected') && line.includes('conn-life-1'));
+    expect(disconnectLine).toBeDefined();
+    expect(disconnectLine).toContain('reason=network_error');
+    expect(disconnectLine).toMatch(/upMs=\d+/);
+    expect(disconnectLine).toContain('retryInMs=');
+
+    transport.destroy();
+    logSpy.mockRestore();
+    logger.setup({ debugLog: false });
+  });
+
+  it('does not emit SSE lifecycle lines when debugLog is off', async () => {
+    const { logger } = await import('@/core/helpers/logger');
+    logger.setup({ debugLog: false });
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    const { transport, es } = await openStream();
+    es.onerror?.(new Event('error'));
+    await flush();
+
+    const lifecycle = logSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter(
+        (line) =>
+          line.includes('connected connectionId=') ||
+          line.includes('disconnected connectionId='),
+      );
+    expect(lifecycle).toHaveLength(0);
+
+    transport.destroy();
+    logSpy.mockRestore();
+  });
 });
