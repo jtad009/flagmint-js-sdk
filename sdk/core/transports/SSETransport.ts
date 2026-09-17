@@ -32,6 +32,11 @@ export interface SseTransportConfig<C = unknown, T = unknown> {
    * flags are re-evaluated locally and returned immediately.
    */
   contextAsTelemetry?: boolean;
+  /**
+   * API base for `POST …/context` (defaults to `endpoint`). Use the API host
+   * when `endpoint` is a stream-only hostname.
+   */
+  contextEndpoint?: string;
 }
 
 const INITIAL_FLAGS_TIMEOUT_MS = 5000;
@@ -97,8 +102,9 @@ function isQuotaEvent(payload: Record<string, any>): boolean {
  * Stream: `GET {endpoint}/stream?sessionId&context&sdkVersion&platform&wrapper*`
  *   emits `connected` then `flags`. Heartbeats are SSE comments (`: heartbeat`)
  *   and are not visible to EventSource — they only keep the TCP connection alive.
- * Context: `POST {endpoint}/context` with `x-api-key` returns 202 and the
+ * Context: `POST {contextEndpoint|endpoint}/context` with `x-api-key` returns 202 and the
  *   re-evaluated flags arrive on the existing stream after a 400ms debounce.
+ *   Prefer the API host when `endpoint` is stream-only (`STREAM_HOSTS`).
  *
  * @template C The shape of the evaluation context sent to the Flagmint server.
  * @template T The feature flag value type returned by the platform.
@@ -286,6 +292,12 @@ export class SseTransport<C, T> implements Transport<C, T> {
     return this.configOptions?.apiKey ?? '';
   }
 
+  /** Host for POST /context — API when stream host is SSE-only. */
+  private get contextBase(): string {
+    const override = this.configOptions?.contextEndpoint;
+    return typeof override === 'string' && override.length > 0 ? override : this.endpoint;
+  }
+
   private applyFlags(nextFlags: Record<string, T>): void {
     this.flags = nextFlags;
     this.onFlagsUpdatedCallback?.(this.flags);
@@ -364,7 +376,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
     const abortId = setTimeout(() => abortController.abort(), CONTEXT_UPDATE_TIMEOUT_MS);
 
     try {
-      const response = await fetch(`${this.endpoint}/context`, {
+      const response = await fetch(`${this.contextBase}/context`, {
         method: 'POST',
         signal: abortController.signal,
         headers: {
@@ -419,7 +431,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
   /** Fire-and-forget observed-context telemetry for config-sync mode. */
   private async postContextTelemetry(context: C): Promise<void> {
     try {
-      await fetch(`${this.endpoint}/context`, {
+      await fetch(`${this.contextBase}/context`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

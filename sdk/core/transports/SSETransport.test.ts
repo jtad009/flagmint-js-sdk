@@ -537,6 +537,45 @@ describe('SseTransport', () => {
     transport.destroy();
   });
 
+  it('posts context to contextEndpoint when stream host differs', async () => {
+    global.fetch = jest.fn(async () => ({
+      ok: true,
+      status: 202,
+      json: async () => ({ statusCode: 202 }),
+    })) as unknown as typeof fetch;
+
+    const transport = new SseTransport<Record<string, any>, unknown>(
+      'http://stream.flagmint.test/evaluator/v2/flags',
+      'session-split',
+      { user: { key: 'u1' } },
+      undefined,
+      {
+        apiKey: 'key',
+        EventSourceImpl: MockEventSource,
+        contextEndpoint: 'http://api.flagmint.test/evaluator/v2/flags',
+      },
+    );
+
+    const initPromise = transport.init();
+    const es = MockEventSource.instances[0];
+    expect(es.url).toContain('http://stream.flagmint.test/evaluator/v2/flags/stream');
+    es.emit('connected', { connectionId: 'conn-split' });
+    es.emit('flags', { flags: { a: true } });
+    await initPromise;
+
+    const updatePromise = transport.fetchFlags({ user: { key: 'u2' } });
+    await Promise.resolve();
+    es.emit('flags', { flags: { a: false } });
+    await updatePromise;
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      'http://api.flagmint.test/evaluator/v2/flags/context',
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    transport.destroy();
+  });
+
   it('config sync evaluates locally during reconnect without an active connectionId', async () => {
     const fetchMock = global.fetch as jest.Mock;
     fetchMock.mockClear();

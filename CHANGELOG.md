@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Default behavior (`configSync` off / omitted) stays the classic server-eval stream path.
+- **Default SSE hosts** use `stream.flagmint.com` / `staging-stream.flagmint.com` (handshake + REST + context stay on `api` / `staging-api`). `POST /context` is derived from `restEndpoint` so stream-only hostnames do not break context updates.
 
 ### Notes
 

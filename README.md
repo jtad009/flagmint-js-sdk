@@ -137,8 +137,10 @@ After `ready()`:
 | `persistContext` | boolean | `false` | Persist context in the cache adapter |
 | `cacheAdapter` | CacheAdapter | localStorage helpers | Custom cache (Redis, files, …) |
 | `restEndpoint` | string | env default | Override the long-polling / evaluate URL |
-| `sseEndpoint` | string | env default | Override the SSE base URL (`/stream` and `/context`) |
-| `handshakeEndpoint` | string | env default | Override the ASL handshake URL. Use with `sseEndpoint` for self-hosted gateways |
+| `sseEndpoint` | string | env default | Override the SSE stream base URL (`/stream` only). Defaults to `stream.flagmint.com` / `staging-stream…` |
+| `flagsEndpoint` | string | from `restEndpoint` | Override the API base for `POST /context`. Needed when stream and API hosts differ |
+| `handshakeEndpoint` | string | env default | Override the ASL handshake URL. Use with `restEndpoint` / `sseEndpoint` for self-hosted gateways |
+| `restEndpoint` | string | env default | Override REST evaluate URL (also drives events + default context host) |
 | `env` | string | `NODE_ENV` | `development` \| `staging` \| `production` |
 | `wrapperInfo` | `{ name, version }` | native-js | Framework wrapper telemetry on the stream URL |
 | `previewMode` / `rawFlags` | | | Local-only evaluation, no network |

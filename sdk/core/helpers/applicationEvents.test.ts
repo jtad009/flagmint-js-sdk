@@ -1,5 +1,6 @@
 import {
   eventsUrlFromRestEndpoint,
+  flagsBaseFromRestEndpoint,
   extraFromError,
   shouldReportApplicationEvent,
   userKeyFromContext,
@@ -12,6 +13,18 @@ describe('applicationEvents helpers', () => {
     );
     expect(eventsUrlFromRestEndpoint('http://localhost:3000/evaluator/evaluate')).toBe(
       'http://localhost:3000/evaluator/events'
+    );
+  });
+
+  it('derives the flags API base from the evaluate endpoint', () => {
+    expect(flagsBaseFromRestEndpoint('https://api.flagmint.com/evaluator/evaluate')).toBe(
+      'https://api.flagmint.com/evaluator/v2/flags'
+    );
+    expect(flagsBaseFromRestEndpoint('https://staging-api.flagmint.com/evaluator/evaluate')).toBe(
+      'https://staging-api.flagmint.com/evaluator/v2/flags'
+    );
+    expect(flagsBaseFromRestEndpoint('http://localhost:3000/evaluator/evaluate')).toBe(
+      'http://localhost:3000/evaluator/v2/flags'
     );
   });
 

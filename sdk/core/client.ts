@@ -16,6 +16,7 @@ import {
   EVENT_FLUSH_MS,
   MAX_EVENT_BATCH,
   eventsUrlFromRestEndpoint,
+  flagsBaseFromRestEndpoint,
   extraFromError,
   shouldReportApplicationEvent,
   userKeyFromContext,
@@ -67,8 +68,18 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
   deferInitialization?: boolean;
   cacheAdapter?: CacheAdapter<C>;
   restEndpoint?: string;
+  /**
+   * SSE stream base (`…/evaluator/v2/flags`). Defaults to the stream host
+   * (`stream.flagmint.com` / `staging-stream…`). EventSource only — context
+   * POST uses the API host (see `flagsEndpoint` / `restEndpoint`).
+   */
   sseEndpoint?: string;
-  /** Override the ASL handshake URL. Use with `sseEndpoint` for self-hosted gateways. */
+  /**
+   * API base for `POST …/context` (`…/evaluator/v2/flags`). Defaults from
+   * `restEndpoint`. Override for self-hosted splits that do not match evaluate→v2/flags.
+   */
+  flagsEndpoint?: string;
+  /** Override the ASL handshake URL. Use with `sseEndpoint` / `restEndpoint` for self-hosted gateways. */
   handshakeEndpoint?: string;
   debugLog?: boolean; // opt-in SDK logs, including SSE connected/disconnected lifecycle (connectionId, upMs)
   env?: string;
@@ -108,7 +119,7 @@ function getDefaultEndpoints(env?: string): { rest: string; handshakeURL: string
   switch (environment?.toLowerCase()) {
     case 'staging':
       return {
-        sse: 'https://staging-api.flagmint.com/evaluator/v2/flags',
+        sse: 'https://staging-stream.flagmint.com/evaluator/v2/flags',
         rest: 'https://staging-api.flagmint.com/evaluator/evaluate',
         handshakeURL: 'https://staging-api.flagmint.com/auth/asl-handshake'
       };
@@ -121,7 +132,7 @@ function getDefaultEndpoints(env?: string): { rest: string; handshakeURL: string
     case 'production':
     default:
       return {
-        sse: 'https://api.flagmint.com/evaluator/v2/flags',
+        sse: 'https://stream.flagmint.com/evaluator/v2/flags',
         rest: 'https://api.flagmint.com/evaluator/evaluate',
         handshakeURL: 'https://api.flagmint.com/auth/asl-handshake'
       };
@@ -148,6 +159,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   private eventsEndpoint: string;
   private aslHandshakeUrl: string;
   private sseEndpoint: string;
+  /** API host base for POST /context (stream host may be SSE-only). */
+  private flagsApiEndpoint: string;
   private eventQueue: ApplicationEvent[] = [];
   private eventFlushTimer: ReturnType<typeof setTimeout> | null = null;
   /** null = server has not sent a map yet; send and let ingest drop. */
@@ -192,6 +205,15 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     this.eventsEndpoint = eventsUrlFromRestEndpoint(this.restEndpoint);
     this.sseEndpoint = options.sseEndpoint ?? defaultEndpoints.sse;
     this.aslHandshakeUrl = options.handshakeEndpoint ?? defaultEndpoints.handshakeURL;
+    // Context POST must hit the API host. Stream hosts may reject non-SSE paths.
+    // Legacy: only `sseEndpoint` overridden → treat as all-in-one gateway.
+    const sseIsCustom = Boolean(options.sseEndpoint) && options.sseEndpoint !== defaultEndpoints.sse;
+    const restIsCustom = Boolean(options.restEndpoint) && options.restEndpoint !== defaultEndpoints.rest;
+    this.flagsApiEndpoint =
+      options.flagsEndpoint ??
+      (sseIsCustom && !restIsCustom
+        ? this.sseEndpoint
+        : flagsBaseFromRestEndpoint(this.restEndpoint));
     this.cacheAdapter = options.cacheAdapter ?? {
       loadFlags: syncCache.loadCachedFlags,
       saveFlags: syncCache.saveCachedFlags,
@@ -473,6 +495,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
           apiKey: options.apiKey,
           wrapper: options.wrapperInfo,
           EventSourceImpl: options.EventSourceImpl,
+          contextEndpoint: this.flagsApiEndpoint,
           ...(this.configSync && this.rulesStore
             ? {
                 configSync: true,
