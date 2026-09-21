@@ -275,18 +275,24 @@ The callback runs immediately with the current snapshot, then on every push. `de
 
 # Offline cache
 
-Enabled by default. On boot the SDK loads `flagmint_<apiKey>_flags` from localStorage (24h TTL). If the stream fails, those values stay in memory and `onError` fires.
+Enabled by default.
+
+- **Browser:** loads `flagmint_<apiKey>_flags` from localStorage (24h TTL). With `configSync`, also hydrates/persists `flagmint_<apiKey>_rules` (lease `expiresAt`, not wall-clock TTL).
+- **Node with no adapter:** config-sync rules still work **in memory** for that process (`RulesStore`). Helper persist is a no-op — restart → cold `fullConfig`. Plug in `setCacheStorage` / `setAsyncCacheStorage` or a custom `cacheAdapter` to survive restarts.
+- If the stream fails, the last in-memory snapshot stays and `onError` fires.
 
 ```ts
 cacheAdapter: {
   loadFlags(apiKey, ttl) { /* ... */ },
   saveFlags(apiKey, data) { /* ... */ },
   loadContext(apiKey) { /* ... */ },
-  saveContext(apiKey, ctx) { /* ... */ }
+  saveContext(apiKey, ctx) { /* ... */ },
+  loadRulesSnapshot(apiKey) { /* ... */ },   // configSync
+  saveRulesSnapshot(apiKey, snap) { /* ... */ },
 }
 ```
 
-Use `syncCache` in the browser and `asyncCache` (or your own) in Node / React Native.
+Use `syncCache` in the browser and `asyncCache` (or your own) in Node / React Native. See `sdk/core/helpers/Readme.md`.
 
 ---
 
