@@ -245,6 +245,17 @@ export class SseTransport<C, T> implements Transport<C, T> {
   }
 
   /**
+   * Drop the live stream and reconnect (fresh ASL ticket).
+   * Used when the config-sync lease expires so the next open can request fullConfig.
+   *
+   * @param reason Lifecycle reason for debug logs
+   */
+  requestReconnect(reason: string = 'client_request'): void {
+    if (this.terminalClose) return;
+    this.scheduleActiveReconnection(reason);
+  }
+
+  /**
    * Opt-in SSE lifecycle lines (`FlagClient` `debugLog: true`).
    * Example: `[SseTransport] disconnected connectionId=… upMs=900012 reason=network_error retryInMs=1500`
    */

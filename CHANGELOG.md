@@ -5,6 +5,16 @@ All notable changes to the Flagmint JS SDK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Call-site evaluation reports.** `getFlag()` queues debounced `kind: "evaluation"` events (coalesced `count`) to `POST /evaluator/events` when analytics is on for that flag. Feeds dashboard Evaluations / unique users; does **not** consume billing quota.
+
+### Changed
+
+- Plan-limit note: API `feat/billing-meters` enforces connection / observed_context / track caps when configured.
+
 ## [2.1.0] — 2026-09-15
 
 ### Added
@@ -22,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Notes
 
 - Requires a Flagmint API that supports config-sync + ECDH (FF-EU **1.5.0+** recommended).
-- Plan limits on new billing meters are **not** part of this release.
+- Plan limits on new billing meters ship with the paired API build (`feat/billing-meters`); local `getFlag` remains free for quota.
 
 ## [2.0.1] — 2026-09-09
 

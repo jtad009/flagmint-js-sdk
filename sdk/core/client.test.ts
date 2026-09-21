@@ -448,6 +448,147 @@ describe('FlagClient', () => {
     expect(client.getRulesStore()!.getMacKey()).toBeNull();
   });
 
+  it('configSync expired lease fail-closes getFlag and requests reconnect', async () => {
+    const { generateKeyPairSync, createPublicKey, diffieHellman, hkdfSync } = await import(
+      'node:crypto'
+    );
+    const { signConfigPayload } = await import('./config-sync');
+
+    class MockEventSource {
+      static instances: MockEventSource[] = [];
+      url: string;
+      onerror: ((ev?: unknown) => void) | null = null;
+      private listeners = new Map<string, Set<(event: MessageEvent) => void>>();
+      constructor(url: string) {
+        this.url = url;
+        MockEventSource.instances.push(this);
+      }
+      addEventListener(type: string, listener: (event: MessageEvent) => void) {
+        if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+        this.listeners.get(type)!.add(listener);
+      }
+      removeEventListener(type: string, listener: (event: MessageEvent) => void) {
+        this.listeners.get(type)?.delete(listener);
+      }
+      close() {}
+      emit(type: string, data: unknown) {
+        const event = {
+          data: typeof data === 'string' ? data : JSON.stringify(data),
+        } as MessageEvent;
+        this.listeners.get(type)?.forEach((listener) => listener(event));
+      }
+    }
+    MockEventSource.instances = [];
+
+    global.fetch = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('asl-handshake')) {
+        const body = JSON.parse(String(init?.body || '{}')) as { clientPublicKey?: string };
+        const clientRaw = Buffer.from(body.clientPublicKey!, 'hex');
+        const { publicKey, privateKey } = generateKeyPairSync('x25519');
+        const shared = diffieHellman({
+          privateKey,
+          publicKey: createPublicKey({
+            key: {
+              kty: 'OKP',
+              crv: 'X25519',
+              x: clientRaw.toString('base64url'),
+            },
+            format: 'jwk',
+          }),
+        });
+        const salt = Buffer.alloc(16, 7);
+        void Buffer.from(
+          hkdfSync('sha256', shared, salt, 'flagmint-asl-config-sync-mac-v1', 32),
+        );
+        const jwk = publicKey.export({ format: 'jwk' }) as { x?: string };
+        return jsonResponse(200, {
+          data: {
+            sessionId: 'sess-ecdh-expire',
+            serverPublicKey: Buffer.from(jwk.x!, 'base64url').toString('hex'),
+            salt: salt.toString('hex'),
+            keyAgreement: 'x25519-hkdf-sha256',
+          },
+        });
+      }
+      return jsonResponse(202, { statusCode: 202 });
+    }) as unknown as typeof fetch;
+
+    const client = new FlagClient({
+      apiKey: 'ff_test',
+      enableFlagmint: true,
+      deferInitialization: true,
+      shareConnection: false,
+      enableOfflineCache: false,
+      configSync: true,
+      context: { user: { key: 'u1', plan: 'pro' } },
+      EventSourceImpl: MockEventSource,
+      handshakeEndpoint: 'https://gateway.example/auth/asl-handshake',
+      sseEndpoint: 'https://gateway.example/evaluator/v2/flags',
+    });
+
+    const readyPromise = client.ready(500);
+    let es: InstanceType<typeof MockEventSource> | undefined;
+    for (let i = 0; i < 20 && !es; i++) {
+      await Promise.resolve();
+      es = MockEventSource.instances[0];
+    }
+    expect(es).toBeDefined();
+
+    const mac = client.getRulesStore()!.getMacKey()!;
+    const expiresAt = Date.now() + 60_000;
+    const leaseBody = {
+      type: 'lease' as const,
+      version: 1,
+      serverNow: Date.now(),
+      expiresAt,
+    };
+    const fullBody = {
+      type: 'fullConfig' as const,
+      version: 1,
+      compiledAt: Date.now(),
+      expiresAt,
+      flags: [
+        {
+          key: 'demo',
+          type: 'boolean' as const,
+          is_active: true,
+          default_value: false,
+          targeting_rules: [
+            {
+              id: 'r1',
+              kind: 'custom',
+              order_index: 0,
+              conditions: [{ attribute: 'user.plan', operator: 'eq', value: 'pro' }],
+              variation_id: 'on',
+            },
+          ],
+          variations: [
+            { id: 'on', value: true },
+            { id: 'off', value: false },
+          ],
+          rollouts: {},
+          analytics_enabled: true,
+        },
+      ],
+      segments: {},
+    };
+
+    es!.emit('connected', { connectionId: 'conn-expire' });
+    es!.emit('lease', { ...leaseBody, signature: signConfigPayload(leaseBody, mac) });
+    es!.emit('fullConfig', { ...fullBody, signature: signConfigPayload(fullBody, mac) });
+    await readyPromise;
+    expect(client.getFlag('demo')).toBe(true);
+
+    // Force wall-clock expiry.
+    (client.getRulesStore()!.getState() as { expiresAt: number }).expiresAt = Date.now() - 1;
+
+    expect(client.getFlag('demo')).toBe(false); // fail-closed default
+    expect(client.getRulesStore()!.isReady()).toBe(false);
+    expect(client.getRulesStore()!.getState().needsFullConfig).toBe(true);
+
+    client.destroy();
+  });
+
   it('configSync persists rules localCache and reconnects with sinceVersion', async () => {
     const { generateKeyPairSync, createPublicKey, diffieHellman, hkdfSync } = await import(
       'node:crypto'
