@@ -431,6 +431,10 @@ export class SseTransport<C, T> implements Transport<C, T> {
   /** Fire-and-forget observed-context telemetry for config-sync mode. */
   private async postContextTelemetry(context: C): Promise<void> {
     try {
+      // Local-eval results travel with the context so the dashboard can show
+      // what was served for this observation (server never re-evaluates here).
+      const variationResults =
+        this.configOptions?.getEvaluatedFlags?.(context) ?? this.flags;
       await fetch(`${this.contextBase}/context`, {
         method: 'POST',
         headers: {
@@ -440,6 +444,7 @@ export class SseTransport<C, T> implements Transport<C, T> {
         body: JSON.stringify({
           connectionId: this.connectionId,
           context,
+          variationResults,
         }),
       });
     } catch (err) {
