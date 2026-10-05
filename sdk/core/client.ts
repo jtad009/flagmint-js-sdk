@@ -1007,9 +1007,10 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   }
 
   /**
-   * If the config-sync lease is past expiresAt: fail-closed to defaults, persist,
-   * and drop/reconnect the SSE stream so the next open requests fullConfig.
-   * Always leaves a value map available for getFlag / events (defaults).
+   * If a previously-ready config-sync lease just crossed expiresAt: fail-closed
+   * to defaults, persist, notify once, and reconnect for fullConfig.
+   * Bootstrapping or already-expired stores return without side effects so
+   * getFlag/getFlags cannot re-enter via subscriber updates.
    *
    * @param now Wall clock for expiry check
    */
@@ -1018,9 +1019,11 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     if (this.rulesStore.isReady(now)) return;
 
     const state = this.rulesStore.getState();
-    if (state.ready || !state.needsFullConfig) {
-      this.rulesStore.markExpired();
-    }
+    // Only a previously-ready store that crossed expiresAt is a lease expiry.
+    // Bootstrapping or already-expired stores must not re-notify or reconnect.
+    if (!state.ready || state.flags.size === 0) return;
+
+    this.rulesStore.markExpired();
     this.persistRulesSnapshot();
     this.updateFlags(this.evaluateFromRulesStore());
 

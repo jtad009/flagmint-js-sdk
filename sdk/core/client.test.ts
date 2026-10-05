@@ -579,12 +579,61 @@ describe('FlagClient', () => {
     await readyPromise;
     expect(client.getFlag('demo')).toBe(true);
 
+    const transport = (client as unknown as { transport: { requestReconnect: (r: string) => void } })
+      .transport;
+    const reconnectSpy = jest.spyOn(transport, 'requestReconnect');
+
+    let notifyCount = 0;
+    client.subscribe(() => {
+      notifyCount += 1;
+      // Re-entrant read like a React hook — must not loop while expired.
+      client.getFlag('demo');
+    });
+    const notifiesAfterSubscribe = notifyCount;
+
     // Force wall-clock expiry.
     (client.getRulesStore()!.getState() as { expiresAt: number }).expiresAt = Date.now() - 1;
 
     expect(client.getFlag('demo')).toBe(false); // fail-closed default
+    expect(client.getFlag('demo')).toBe(false);
+    expect(client.getFlag('demo')).toBe(false);
     expect(client.getRulesStore()!.isReady()).toBe(false);
     expect(client.getRulesStore()!.getState().needsFullConfig).toBe(true);
+    expect(reconnectSpy).toHaveBeenCalledTimes(1);
+    expect(reconnectSpy).toHaveBeenCalledWith('lease_expired');
+    // One transition notify from updateFlags — further reads must not re-enter.
+    expect(notifyCount).toBe(notifiesAfterSubscribe + 1);
+
+    client.destroy();
+  });
+
+  it('configSync bootstrapping getFlag does not reconnect for lease_expired', async () => {
+    const client = new FlagClient({
+      apiKey: 'ff_test',
+      enableFlagmint: true,
+      deferInitialization: true,
+      shareConnection: false,
+      enableOfflineCache: false,
+      configSync: true,
+      context: { user: { key: 'u1' } },
+      EventSourceImpl: class {
+        url: string;
+        onerror: ((ev?: unknown) => void) | null = null;
+        constructor(url: string) {
+          this.url = url;
+        }
+        addEventListener() {}
+        removeEventListener() {}
+        close() {}
+      } as unknown as typeof EventSource,
+      handshakeEndpoint: 'https://gateway.example/auth/asl-handshake',
+      sseEndpoint: 'https://gateway.example/evaluator/v2/flags',
+    });
+
+    // Empty rules store (ready: false) — no transport yet, but lease check must no-op.
+    expect(client.getRulesStore()!.getState().ready).toBe(false);
+    expect(client.getFlag('missing', false as never)).toBe(false);
+    expect(client.getRulesStore()!.getState().ready).toBe(false);
 
     client.destroy();
   });
