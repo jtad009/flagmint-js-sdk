@@ -1,4 +1,5 @@
 import { FeatureFlags } from '../../core/helpers/types';
+import type { RulesCacheSnapshot } from '../../core/config-sync/types';
 export interface StorageAdapter {
     getItem(key: string): string | null;
     setItem(key: string, value: string): void;
@@ -9,3 +10,7 @@ export declare function loadCachedFlags<T>(apiKey: string, ttl: number): Feature
 export declare function saveCachedFlags<T>(apiKey: string, data: FeatureFlags<T>): void;
 export declare function loadCachedContext<C>(apiKey: string): C | null;
 export declare function saveCachedContext<C>(apiKey: string, context: C): void;
+/** Config-sync rules localCache — no wall-clock TTL; lease `expiresAt` gates reuse. */
+export declare function loadCachedRulesSnapshot(apiKey: string): RulesCacheSnapshot | null;
+export declare function saveCachedRulesSnapshot(apiKey: string, snapshot: RulesCacheSnapshot): void;
+export declare function clearCachedRulesSnapshot(apiKey: string): void;

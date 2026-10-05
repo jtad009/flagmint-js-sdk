@@ -13,6 +13,7 @@ export declare class LongPollingTransport<C, T> implements Transport<C, T> {
     private backoffMultiplier;
     private pollTimeoutId;
     private onUpdateCallback?;
+    private onAnalyticsUpdatedCallback?;
     private currentContext;
     private currentFlags;
     private consecutiveErrors;
@@ -23,7 +24,11 @@ export declare class LongPollingTransport<C, T> implements Transport<C, T> {
     private poll;
     private applyBackoff;
     private flagsChanged;
-    fetchFlags(context: C): Promise<Record<string, T>>;
+    fetchFlags(context: C, options?: {
+        persist?: boolean;
+    }): Promise<Record<string, T>>;
+    private readQuotaPayload;
     onFlagsUpdated(callback: (flags: Record<string, T>) => void): void;
+    onAnalyticsUpdated(callback: (analytics: Record<string, boolean>) => void): void;
     destroy(): void;
 }

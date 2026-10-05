@@ -21,7 +21,9 @@ export default defineConfig({
     extensions: ['.mjs', '.js', '.ts', '.jsx', '.tsx', '.json']
   },
   build: {
-     target: 'es2015',
+    // es2020+ keeps BigInt exponentiation (needed by @noble/curves for ECDH).
+    // es2015 rewrote `**` to Math.pow and broke Node require of the CJS build.
+    target: 'es2020',
     lib: {
       entry: './index.ts',
       name: 'flagmint',
