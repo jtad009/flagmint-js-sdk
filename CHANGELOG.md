@@ -5,17 +5,7 @@ All notable changes to the Flagmint JS SDK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Added
-
-- **Call-site evaluation reports.** `getFlag()` queues debounced `kind: "evaluation"` events (coalesced `count`) to `POST /evaluator/events` when analytics is on for that flag. Feeds dashboard Evaluations / unique users; does **not** consume billing quota.
-
-### Changed
-
-- Plan-limit note: API `feat/billing-meters` enforces connection / observed_context / track caps when configured.
-
-## [2.1.0] — 2026-09-15
+## [2.2.0] — 2026-09-15
 
 ### Added
 
@@ -23,11 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ECDH handshake.** When config sync is on, the ASL handshake exchanges public keys and derives a per-session MAC key (secret never sent on the wire). Tampered payloads are rejected.
 - **Rules store + local `getFlag`.** In-memory rules with optional **localCache** across reloads; expired lease fails closed (defaults only, no targeting).
 - **SSE lifecycle debug logs.** With `debugLog: true`, logs connected / disconnected lines including `connectionId`, `upMs`, and reason (including `initial_connect_failed` when the stream dies before `connected`).
+- **Call-site evaluation reports.** `getFlag()` queues debounced `kind: "evaluation"` events (coalesced `count`) to `POST /evaluator/events` when analytics is on for that flag. Feeds dashboard Evaluations / unique users; does **not** consume billing quota.
 
 ### Changed
 
 - Default behavior (`configSync` off / omitted) stays the classic server-eval stream path.
 - **Default SSE hosts** use `stream.flagmint.com` / `staging-stream.flagmint.com` (handshake + REST + context stay on `api` / `staging-api`). `POST /context` is derived from `restEndpoint` so stream-only hostnames do not break context updates.
+- Plan-limit note: API `feat/billing-meters` enforces connection / observed_context / track caps when configured.
 
 ### Notes
 
