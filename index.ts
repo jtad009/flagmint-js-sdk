@@ -25,3 +25,41 @@ export { evaluateFlagValue } from './sdk/core/evaluation/evaluateFlagValue';
 export { evaluateRollout }    from './sdk/core/evaluation/evaluateRollout';
 export { isInSegment }        from './sdk/core/evaluation/isInSegment';
 export * from './sdk/core/evaluation/rolloutUtils';
+
+// Config sync (local evaluation)
+export {
+  RulesStore,
+  createEmptyRulesState,
+  reduceRules,
+  performAslHandshake,
+  generateAslClientKeyPair,
+  deriveAslMacKey,
+  signConfigPayload,
+  verifyConfigPayloadSignature,
+  canonicalizeForSigning,
+  isConfigPayloadExpired,
+  evaluateSdkFlag,
+  evaluateAllSdkFlags,
+  coerceType,
+  evaluateRule,
+  evaluateFlagWithTargetingRules,
+  applyRolloutStrategy,
+  computeCurrentPercentage,
+  defaultHash,
+  flattenEvaluationContext,
+  stringHash,
+  hashPercent,
+} from './sdk/core/config-sync';
+export type {
+  SdkFlagConfig,
+  SdkSegment,
+  RulesState,
+  RulesCacheSnapshot,
+  ConfigSyncPayload,
+  LeasePayload,
+  FullConfigPayload,
+  DeltaConfigPayload,
+  DeltasCatchUpPayload,
+  ApplyResult,
+  AslHandshakeSuccess,
+} from './sdk/core/config-sync';

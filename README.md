@@ -137,8 +137,10 @@ After `ready()`:
 | `persistContext` | boolean | `false` | Persist context in the cache adapter |
 | `cacheAdapter` | CacheAdapter | localStorage helpers | Custom cache (Redis, files, …) |
 | `restEndpoint` | string | env default | Override the long-polling / evaluate URL |
-| `sseEndpoint` | string | env default | Override the SSE base URL (`/stream` and `/context`) |
-| `handshakeEndpoint` | string | env default | Override the ASL handshake URL. Use with `sseEndpoint` for self-hosted gateways |
+| `sseEndpoint` | string | env default | Override the SSE stream base URL (`/stream` only). Defaults to `stream.flagmint.com` / `staging-stream…` |
+| `flagsEndpoint` | string | from `restEndpoint` | Override the API base for `POST /context`. Needed when stream and API hosts differ |
+| `handshakeEndpoint` | string | env default | Override the ASL handshake URL. Use with `restEndpoint` / `sseEndpoint` for self-hosted gateways |
+| `restEndpoint` | string | env default | Override REST evaluate URL (also drives events + default context host) |
 | `env` | string | `NODE_ENV` | `development` \| `staging` \| `production` |
 | `wrapperInfo` | `{ name, version }` | native-js | Framework wrapper telemetry on the stream URL |
 | `previewMode` / `rawFlags` | | | Local-only evaluation, no network |
@@ -273,18 +275,24 @@ The callback runs immediately with the current snapshot, then on every push. `de
 
 # Offline cache
 
-Enabled by default. On boot the SDK loads `flagmint_<apiKey>_flags` from localStorage (24h TTL). If the stream fails, those values stay in memory and `onError` fires.
+Enabled by default.
+
+- **Browser:** loads `flagmint_<apiKey>_flags` from localStorage (24h TTL). With `configSync`, also hydrates/persists `flagmint_<apiKey>_rules` (lease `expiresAt`, not wall-clock TTL).
+- **Node with no adapter:** config-sync rules still work **in memory** for that process (`RulesStore`). Helper persist is a no-op — restart → cold `fullConfig`. Plug in `setCacheStorage` / `setAsyncCacheStorage` or a custom `cacheAdapter` to survive restarts.
+- If the stream fails, the last in-memory snapshot stays and `onError` fires.
 
 ```ts
 cacheAdapter: {
   loadFlags(apiKey, ttl) { /* ... */ },
   saveFlags(apiKey, data) { /* ... */ },
   loadContext(apiKey) { /* ... */ },
-  saveContext(apiKey, ctx) { /* ... */ }
+  saveContext(apiKey, ctx) { /* ... */ },
+  loadRulesSnapshot(apiKey) { /* ... */ },   // configSync
+  saveRulesSnapshot(apiKey, snap) { /* ... */ },
 }
 ```
 
-Use `syncCache` in the browser and `asyncCache` (or your own) in Node / React Native.
+Use `syncCache` in the browser and `asyncCache` (or your own) in Node / React Native. See `sdk/core/helpers/Readme.md`.
 
 ---
 

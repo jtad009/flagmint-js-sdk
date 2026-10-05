@@ -31,6 +31,30 @@ export function eventsUrlFromRestEndpoint(restEndpoint: string): string {
   }
 }
 
+/**
+ * API base for `POST …/context` (and similar) from the REST evaluate URL.
+ * Stream hosts may be SSE-only (`STREAM_HOSTS`); context must stay on the API host.
+ *
+ * `https://api…/evaluator/evaluate` → `https://api…/evaluator/v2/flags`
+ */
+export function flagsBaseFromRestEndpoint(restEndpoint: string): string {
+  try {
+    const url = new URL(restEndpoint);
+    if (url.pathname.endsWith('/evaluate')) {
+      url.pathname = url.pathname.replace(/\/evaluate\/?$/, '/v2/flags');
+      return url.toString().replace(/\/$/, '');
+    }
+    const trimmed = url.pathname.replace(/\/$/, '');
+    url.pathname = `${trimmed}/v2/flags`;
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    if (restEndpoint.endsWith('/evaluate')) {
+      return restEndpoint.replace(/\/evaluate\/?$/, '/v2/flags');
+    }
+    return `${restEndpoint.replace(/\/$/, '')}/v2/flags`;
+  }
+}
+
 export function userKeyFromContext(context: Record<string, unknown> | undefined): string | undefined {
   if (!context || typeof context !== 'object') return undefined;
   const user = context.user;
