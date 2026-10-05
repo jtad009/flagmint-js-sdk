@@ -827,6 +827,11 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     if (this.refreshIntervalId) {
       clearInterval(this.refreshIntervalId);
     }
+    if (this.evaluationReportTimer) {
+      clearTimeout(this.evaluationReportTimer);
+      this.evaluationReportTimer = null;
+    }
+    this.evaluationReportQueue.clear();
     if (this.eventFlushTimer) {
       clearTimeout(this.eventFlushTimer);
       this.eventFlushTimer = null;
