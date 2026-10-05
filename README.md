@@ -199,7 +199,9 @@ SSE `/context` changes **that connection’s** context. It is the right tool for
 
 # Tracking application errors
 
-`getFlag()` tells you what was served. `trackError()` tells Flagmint whether that variation hurt the user. Errors are attributed to the **currently served value** of the flag, batched, and posted to `POST /evaluator/events`. The call never throws.
+`getFlag()` tells you what was served and, when Analytics Tracking is on for that flag, queues a **debounced call-site evaluation** report (dashboard Evaluations). That report is not a billing meter.
+
+`trackError()` tells Flagmint whether that variation hurt the user. Errors are attributed to the **currently served value** of the flag, batched, and posted to `POST /evaluator/events`. The call never throws.
 
 Analytics must be enabled on the flag in the dashboard. The SDK skips `trackError` / `track` locally once the SSE `flags` packet includes `analytics` for that key. Older servers without the map still accept the POST and drop it at ingest.
 

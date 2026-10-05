@@ -1,7 +1,9 @@
 export const MAX_EVENT_BATCH = 20;
 export const EVENT_FLUSH_MS = 2000;
+/** Debounce window for coalescing getFlag call-site evaluation reports. */
+export const EVAL_REPORT_FLUSH_MS = 2000;
 
-export type ApplicationEventKind = 'error' | 'custom';
+export type ApplicationEventKind = 'error' | 'custom' | 'evaluation';
 
 export interface ApplicationEvent {
   flagKey: string;
@@ -9,6 +11,8 @@ export interface ApplicationEvent {
   eventName?: string;
   variationValue?: unknown;
   userKey?: string;
+  /** Coalesced getFlag hits (evaluation kind only). */
+  count?: number;
   timestamp: string;
   extra?: Record<string, unknown>;
 }

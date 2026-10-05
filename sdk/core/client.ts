@@ -14,6 +14,7 @@ import {
 import { toJsonCloneable } from '@/core/helpers/jsonCloneable';
 import {
   EVENT_FLUSH_MS,
+  EVAL_REPORT_FLUSH_MS,
   MAX_EVENT_BATCH,
   eventsUrlFromRestEndpoint,
   flagsBaseFromRestEndpoint,
@@ -163,6 +164,12 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   private flagsApiEndpoint: string;
   private eventQueue: ApplicationEvent[] = [];
   private eventFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Coalesced getFlag hits waiting for EVAL_REPORT_FLUSH_MS. */
+  private evaluationReportQueue = new Map<
+    string,
+    { variationValue: unknown; userKey?: string; count: number }
+  >();
+  private evaluationReportTimer: ReturnType<typeof setTimeout> | null = null;
   /** null = server has not sent a map yet; send and let ingest drop. */
   private analyticsByFlag: Record<string, boolean> | null = null;
   private contextUpdateSeq = 0;
@@ -189,6 +196,8 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
   private shareConnection: boolean;
   private configSync: boolean;
   private rulesStore: RulesStore | null = null;
+  /** Avoid stacking reconnects when many getFlag calls hit an expired lease. */
+  private leaseRenewInFlight = false;
 
   /**
    * Creates a new FlagClient instance.
@@ -627,9 +636,11 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
   /**
    * Get all flags.
+   * Config-sync: if the lease expired, fail-closed to defaults and reconnect.
    */
   getFlags(): FeatureFlags<T> {
     if (this.configSync && this.rulesStore) {
+      this.ensureConfigSyncLeaseFresh();
       // Followers (or pre-bootstrap) have no local rules — use last published map.
       if (this.rulesStore.getState().flags.size === 0) {
         return { ...this.flags };
@@ -641,28 +652,88 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
   /**
    * Get a single flag value.
+   * When analytics is on for the flag, queues a debounced call-site evaluation
+   * report (dashboard Evaluations / unique users). Does not consume billing quota.
+   * Config-sync: expired lease → defaults only, then drop/reconnect (24h renew).
    */
   getFlag<K extends keyof FeatureFlags<T>>(key: K, fallback?: FeatureFlags<T>[K]): FeatureFlags<T>[K] {
     if (this.configSync && this.rulesStore) {
+      this.ensureConfigSyncLeaseFresh();
+    }
+    let value: FeatureFlags<T>[K];
+    if (this.configSync && this.rulesStore) {
       const flag = this.rulesStore.getFlag(String(key));
       if (!flag) {
-        return this.flags[key] ?? fallback!;
-      }
-      if (!this.rulesStore.isReady()) {
-        return (
+        value = this.flags[key] ?? fallback!;
+      } else if (!this.rulesStore.isReady()) {
+        value =
           (coerceType(flag.default_value, flag.type) as FeatureFlags<T>[K]) ??
-          fallback!
-        );
+          fallback!;
+      } else {
+        value =
+          (evaluateSdkFlag(
+            flag,
+            this.context as Record<string, unknown>,
+            this.rulesStore.getState().segments,
+          ) as FeatureFlags<T>[K]) ?? fallback!;
       }
-      return (
-        (evaluateSdkFlag(
-          flag,
-          this.context as Record<string, unknown>,
-          this.rulesStore.getState().segments,
-        ) as FeatureFlags<T>[K]) ?? fallback!
-      );
+    } else {
+      value = this.flags[key] ?? fallback!;
     }
-    return this.flags[key] ?? fallback!;
+    this.queueEvaluationReport(String(key), value);
+    return value;
+  }
+
+  private queueEvaluationReport(flagKey: string, variationValue: unknown): void {
+    if (this.previewMode || this.enableFlagmint === false) return;
+    if (!shouldReportApplicationEvent(this.analyticsByFlag, flagKey)) return;
+
+    const userKey = userKeyFromContext(this.context as Record<string, unknown>);
+    const existing = this.evaluationReportQueue.get(flagKey);
+    if (existing) {
+      existing.count += 1;
+      existing.variationValue = variationValue;
+      existing.userKey = userKey;
+    } else {
+      this.evaluationReportQueue.set(flagKey, {
+        variationValue,
+        userKey,
+        count: 1,
+      });
+    }
+
+    if (this.evaluationReportQueue.size >= MAX_EVENT_BATCH) {
+      this.flushEvaluationReports();
+      return;
+    }
+    if (!this.evaluationReportTimer) {
+      this.evaluationReportTimer = setTimeout(() => {
+        this.evaluationReportTimer = null;
+        this.flushEvaluationReports();
+      }, EVAL_REPORT_FLUSH_MS);
+    }
+  }
+
+  private flushEvaluationReports(): void {
+    if (this.evaluationReportTimer) {
+      clearTimeout(this.evaluationReportTimer);
+      this.evaluationReportTimer = null;
+    }
+    if (this.evaluationReportQueue.size === 0) return;
+
+    const pending = this.evaluationReportQueue;
+    this.evaluationReportQueue = new Map();
+    const ts = new Date().toISOString();
+    for (const [flagKey, entry] of pending) {
+      this.queueApplicationEvent({
+        flagKey,
+        kind: 'evaluation',
+        variationValue: entry.variationValue,
+        userKey: entry.userKey,
+        count: entry.count,
+        timestamp: ts,
+      });
+    }
   }
 
   /**
@@ -709,8 +780,12 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
 
   /**
    * Update the evaluation context.
+   * Config-sync: renews the lease stream first if expired (still evaluates locally).
    */
   async updateContext(context: C): Promise<void> {
+    if (this.configSync && this.rulesStore) {
+      this.ensureConfigSyncLeaseFresh();
+    }
     let pendingContext: C;
     try {
       pendingContext = toJsonCloneable({ ...this.context, ...context } as C);
@@ -752,6 +827,11 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     if (this.refreshIntervalId) {
       clearInterval(this.refreshIntervalId);
     }
+    if (this.evaluationReportTimer) {
+      clearTimeout(this.evaluationReportTimer);
+      this.evaluationReportTimer = null;
+    }
+    this.evaluationReportQueue.clear();
     if (this.eventFlushTimer) {
       clearTimeout(this.eventFlushTimer);
       this.eventFlushTimer = null;
@@ -906,6 +986,11 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     }
     if (this.eventQueue.length === 0) return;
 
+    // Renew lease before POSTing so we stay within the 24h connect window.
+    if (this.configSync && this.rulesStore) {
+      this.ensureConfigSyncLeaseFresh();
+    }
+
     const batch = this.eventQueue.splice(0, MAX_EVENT_BATCH);
     try {
       await fetch(this.eventsEndpoint, {
@@ -924,6 +1009,37 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     if (this.eventQueue.length > 0) {
       void this.flushApplicationEvents();
     }
+  }
+
+  /**
+   * If a previously-ready config-sync lease just crossed expiresAt: fail-closed
+   * to defaults, persist, notify once, and reconnect for fullConfig.
+   * Bootstrapping or already-expired stores return without side effects so
+   * getFlag/getFlags cannot re-enter via subscriber updates.
+   *
+   * @param now Wall clock for expiry check
+   */
+  private ensureConfigSyncLeaseFresh(now: number = Date.now()): void {
+    if (!this.configSync || !this.rulesStore) return;
+    if (this.rulesStore.isReady(now)) return;
+
+    const state = this.rulesStore.getState();
+    // Only a previously-ready store that crossed expiresAt is a lease expiry.
+    // Bootstrapping or already-expired stores must not re-notify or reconnect.
+    if (!state.ready || state.flags.size === 0) return;
+
+    this.rulesStore.markExpired();
+    this.persistRulesSnapshot();
+    this.updateFlags(this.evaluateFromRulesStore());
+
+    if (this.leaseRenewInFlight) return;
+    if (!this.transport?.requestReconnect) return;
+
+    this.leaseRenewInFlight = true;
+    logger.warn(
+      '[FlagClient] Config-sync lease expired — fail-closed to defaults and reconnecting for fullConfig.',
+    );
+    this.transport.requestReconnect('lease_expired');
   }
 
   /**
@@ -1062,6 +1178,10 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     this.persistRulesSnapshot();
 
     const store = this.rulesStore;
+    // Fresh lease / rules after reconnect — allow another renew if needed later.
+    if (result.ok && (eventName === 'lease' || eventName === 'fullConfig')) {
+      this.leaseRenewInFlight = false;
+    }
     // Cold start: lease alone with empty rules — wait for fullConfig/deltas.
     if (
       eventName === 'lease' &&
@@ -1093,7 +1213,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
     if (!this.rulesStore) return {};
     const map: Record<string, boolean> = {};
     for (const [key, flag] of this.rulesStore.getState().flags) {
-      map[key] = flag.analytics_enabled !== false;
+      map[key] = flag.analytics_enabled === true;
     }
     return map;
   }
