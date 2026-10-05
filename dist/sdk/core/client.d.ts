@@ -1,6 +1,8 @@
 import { CacheAdapter, FeatureFlags } from '../core/helpers/types';
 import type { Transport } from '../core/transports/Transport';
 import { FlagValue } from '../core/evaluation/types';
+import { type ConnectionShareOptions } from '../core/helpers/connectionShare';
+import { RulesStore } from '../core/config-sync';
 type TransportMode = 'auto' | 'long-polling' | 'sse';
 export interface FlagClientOptions<C extends Record<string, any> = Record<string, any>> {
     apiKey: string;
@@ -9,6 +11,14 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
     persistContext?: boolean;
     transport?: Transport<C, any>;
     transportMode?: TransportMode;
+    /**
+     * Enable SDK config-sync (local evaluation path).
+     * Performs X25519 ECDH on ASL handshake and derives a session MAC key used
+     * to verify signed `lease` / `fullConfig` / `delta` payloads.
+     * Default false — keeps the legacy evaluated-flags stream.
+     * When true, `shareConnection` defaults to false (rules are not shared across tabs yet).
+     */
+    configSync?: boolean;
     /**
      * Called when a non-fatal but noteworthy error occurs during or after initialization.
      * The client always resolves ready() regardless — use this to show a degraded/fallback UI.
@@ -28,7 +38,19 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
     deferInitialization?: boolean;
     cacheAdapter?: CacheAdapter<C>;
     restEndpoint?: string;
+    /**
+     * SSE stream base (`…/evaluator/v2/flags`). Defaults to the stream host
+     * (`stream.flagmint.com` / `staging-stream…`). EventSource only — context
+     * POST uses the API host (see `flagsEndpoint` / `restEndpoint`).
+     */
     sseEndpoint?: string;
+    /**
+     * API base for `POST …/context` (`…/evaluator/v2/flags`). Defaults from
+     * `restEndpoint`. Override for self-hosted splits that do not match evaluate→v2/flags.
+     */
+    flagsEndpoint?: string;
+    /** Override the ASL handshake URL. Use with `sseEndpoint` / `restEndpoint` for self-hosted gateways. */
+    handshakeEndpoint?: string;
     debugLog?: boolean;
     env?: string;
     enableFlagmint: boolean;
@@ -37,6 +59,22 @@ export interface FlagClientOptions<C extends Record<string, any> = Record<string
         version: string;
     };
     EventSourceImpl?: any;
+    /**
+     * Share one streaming connection across same-origin documents (tabs / iframes)
+     * that use the same API key. Defaults to true in browsers with BroadcastChannel,
+     * false in Node (cluster workers each keep their own stream).
+     *
+     * Followers do not handshake or open EventSource. They receive flags from the
+     * leader and forward updateContext() to it. Do not enable this when two clients
+     * must evaluate different contexts at the same time on one page, or when the
+     * origin hosts untrusted documents that should not steer or read this stream.
+     */
+    shareConnection?: boolean;
+    /**
+     * Test/runtime hooks for the share hub (channel, storage, timers).
+     * Omit in production.
+     */
+    share?: ConnectionShareOptions;
 }
 type FlagUpdateCallback<T> = (flags: FeatureFlags<T>) => void;
 export declare class FlagClient<T = unknown, C extends Record<string, any> = Record<string, any>> {
@@ -49,8 +87,19 @@ export declare class FlagClient<T = unknown, C extends Record<string, any> = Rec
     private cacheTTL;
     private transport;
     private restEndpoint;
+    private eventsEndpoint;
     private aslHandshakeUrl;
     private sseEndpoint;
+    /** API host base for POST /context (stream host may be SSE-only). */
+    private flagsApiEndpoint;
+    private eventQueue;
+    private eventFlushTimer;
+    /** Coalesced getFlag hits waiting for EVAL_REPORT_FLUSH_MS. */
+    private evaluationReportQueue;
+    private evaluationReportTimer;
+    /** null = server has not sent a map yet; send and let ingest drop. */
+    private analyticsByFlag;
+    private contextUpdateSeq;
     private readyPromise;
     private resolveReady;
     private rejectReady;
@@ -64,6 +113,12 @@ export declare class FlagClient<T = unknown, C extends Record<string, any> = Rec
     private initializationOptions?;
     private isInitialized;
     private subscribers;
+    private shareHub;
+    private shareConnection;
+    private configSync;
+    private rulesStore;
+    /** Avoid stacking reconnects when many getFlag calls hit an expired lease. */
+    private leaseRenewInFlight;
     /**
      * Creates a new FlagClient instance.
      * @param options - Configuration options for the client.
@@ -73,8 +128,14 @@ export declare class FlagClient<T = unknown, C extends Record<string, any> = Rec
      * Initializes the client by loading cached flags and context, setting up the transport layer.
      */
     private initialize;
+    private bindTransport;
     /**
-   * Creates and initializes the transport layer used to receive feature flag
+     * @returns true when this document is a follower and should skip opening a stream.
+     */
+    private joinConnectionShare;
+    private attachShareLeader;
+    /**
+   * Creates and initializes the transport layer used to receive feature flags
    * updates from the Flagmint platform.
    *
    * This method performs the authentication handshake to obtain a fresh session
@@ -119,14 +180,38 @@ export declare class FlagClient<T = unknown, C extends Record<string, any> = Rec
     subscribe(callback: FlagUpdateCallback<T>): () => void;
     /**
      * Get all flags.
+     * Config-sync: if the lease expired, fail-closed to defaults and reconnect.
      */
     getFlags(): FeatureFlags<T>;
     /**
      * Get a single flag value.
+     * When analytics is on for the flag, queues a debounced call-site evaluation
+     * report (dashboard Evaluations / unique users). Does not consume billing quota.
+     * Config-sync: expired lease → defaults only, then drop/reconnect (24h renew).
      */
     getFlag<K extends keyof FeatureFlags<T>>(key: K, fallback?: FeatureFlags<T>[K]): FeatureFlags<T>[K];
+    private queueEvaluationReport;
+    private flushEvaluationReports;
+    /**
+     * Report an application error that happened after this flag was served.
+     * Fire-and-forget: events are batched and never throw.
+     * No-ops when Analytics Tracking is off for that flag.
+     */
+    trackError(flagKey: string, error?: unknown, extra?: Record<string, unknown>): void;
+    /**
+     * Report a custom metric event attributed to the currently served variation.
+     * Fire-and-forget: events are batched and never throw.
+     * No-ops when Analytics Tracking is off for that flag.
+     */
+    track(flagKey: string, eventName: string, extra?: Record<string, unknown>): void;
+    /**
+     * Whether Analytics Tracking is on for this flag in the last streamed payload.
+     * `undefined` means the server has not sent a map yet (older API / long-polling).
+     */
+    isAnalyticsEnabled(flagKey: string): boolean | undefined;
     /**
      * Update the evaluation context.
+     * Config-sync: renews the lease stream first if expired (still evaluates locally).
      */
     updateContext(context: C): Promise<void>;
     /**
@@ -142,8 +227,8 @@ export declare class FlagClient<T = unknown, C extends Record<string, any> = Rec
    * become available (or until the specified timeout expires) before awaiting
    * completion of the underlying transport initialization.
    *
-   * This method guarantees that transport or connection failures are surfaced,
-   * even when feature flags have already been restored from cache.
+   * Transport and connection failures do not reject this promise. The client reports them through the `onError` option and resolves anyway, so the
+   * application can render a fallback or degraded UI.
    *
    * @param {number} [timeoutMs=3000] - The maximum amount of time, in
    * milliseconds, to wait for the initial feature flag payload before
@@ -152,8 +237,7 @@ export declare class FlagClient<T = unknown, C extends Record<string, any> = Rec
    * @returns {Promise<void>} A promise that resolves when the client is fully
    * initialized and ready to evaluate feature flags.
    *
-   * @throws {Error} If client initialization or the underlying transport fails,
-   * such as authentication, rate limiting, or connection errors.
+   *
    */
     ready(timeoutMs?: number): Promise<void>;
     /**
@@ -180,6 +264,18 @@ export declare class FlagClient<T = unknown, C extends Record<string, any> = Rec
    * flag payload is received or when the timeout expires, whichever occurs first.
    */
     private waitForFlags;
+    private updateAnalytics;
+    private queueApplicationEvent;
+    private flushApplicationEvents;
+    /**
+     * If a previously-ready config-sync lease just crossed expiresAt: fail-closed
+     * to defaults, persist, notify once, and reconnect for fullConfig.
+     * Bootstrapping or already-expired stores return without side effects so
+     * getFlag/getFlags cannot re-enter via subscriber updates.
+     *
+     * @param now Wall clock for expiry check
+     */
+    private ensureConfigSyncLeaseFresh;
     /**
      * Performs the initial authentication handshake with the Flagmint server
      * to obtain a fresh, single-use session identifier.
@@ -201,5 +297,17 @@ export declare class FlagClient<T = unknown, C extends Record<string, any> = Rec
      * @throws {Error} If the handshake response does not contain a valid session ID.
      */
     private fetchFreshSessionId;
+    /** Config-sync rules store (null when `configSync` is false). */
+    getRulesStore(): RulesStore | null;
+    /**
+     * Restore rules from localCache before the stream opens.
+     * Fresh lease → reconnect with sinceVersion; expired → fullConfig.
+     */
+    private hydrateRulesFromCache;
+    /** Persist rules after a successful (or expiry/gap) apply so reconnect can catch up. */
+    private persistRulesSnapshot;
+    private handleConfigSyncEvent;
+    private evaluateFromRulesStore;
+    private analyticsMapFromRulesStore;
 }
 export {};

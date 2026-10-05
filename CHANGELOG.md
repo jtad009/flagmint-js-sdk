@@ -5,6 +5,13 @@ All notable changes to the Flagmint JS SDK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] — 2026-10-05
+
+### Fixed
+
+- **Publish the config-sync runtime.** `2.2.0` shipped TypeScript types for `configSync` / `RulesCacheSnapshot` / `loadRulesSnapshot`, but the JS bundle was an older build without that code — Node apps with Redis localCache could not hydrate rules.
+- **Node CJS + ECDH.** Raise Vite `build.target` to `es2020` so `@noble/curves` BigInt math is not rewritten to `Math.pow` (which crashed `require('flagmint-js-sdk')` after a fresh config-sync build).
+
 ## [2.2.0] — 2026-09-15
 
 ### Added

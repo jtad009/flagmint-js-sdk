@@ -1,6 +1,7 @@
 export { FlagClient } from './sdk/core/client';
 export type { FlagClientOptions } from './sdk/core/client';
 export type { CacheAdapter, FeatureFlags } from './sdk/core/helpers/types';
+export type { ApplicationEvent, ApplicationEventKind } from './sdk/core/helpers/applicationEvents';
 export * as syncCache from './sdk/core/helpers/cacheHelper';
 export * as asyncCache from './sdk/core/helpers/cacheHelper.async';
 export type { Transport } from './sdk/core/transports/Transport';
@@ -11,3 +12,5 @@ export { evaluateFlagValue } from './sdk/core/evaluation/evaluateFlagValue';
 export { evaluateRollout } from './sdk/core/evaluation/evaluateRollout';
 export { isInSegment } from './sdk/core/evaluation/isInSegment';
 export * from './sdk/core/evaluation/rolloutUtils';
+export { RulesStore, createEmptyRulesState, reduceRules, performAslHandshake, generateAslClientKeyPair, deriveAslMacKey, signConfigPayload, verifyConfigPayloadSignature, canonicalizeForSigning, isConfigPayloadExpired, evaluateSdkFlag, evaluateAllSdkFlags, coerceType, evaluateRule, evaluateFlagWithTargetingRules, applyRolloutStrategy, computeCurrentPercentage, defaultHash, flattenEvaluationContext, stringHash, hashPercent, } from './sdk/core/config-sync';
+export type { SdkFlagConfig, SdkSegment, RulesState, RulesCacheSnapshot, ConfigSyncPayload, LeasePayload, FullConfigPayload, DeltaConfigPayload, DeltasCatchUpPayload, ApplyResult, AslHandshakeSuccess, } from './sdk/core/config-sync';
