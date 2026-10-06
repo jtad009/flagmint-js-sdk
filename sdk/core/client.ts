@@ -112,7 +112,11 @@ const DEFAULT_CACHE_TTL = 24 * 60 * 60 * 1000;
 const HANDSHAKE_TIMEOUT_MS = 10000;
 
 /**
- * Get default endpoints based on NODE_ENV
+ * Get default endpoints based on NODE_ENV.
+ *
+ * `stream.flagmint.com` / `staging-stream…` are **SSE only** (live flag pushes).
+ * Handshake, evaluate, events, and REST config-sync stay on `api.flagmint.com`
+ * (or staging-api / localhost). Do not use the stream host for REST.
  */
 function getDefaultEndpoints(env?: string): { rest: string; handshakeURL: string, sse: string } {
   const environment =
