@@ -177,6 +177,17 @@ describe("config-sync/flagEvaluator (FF-EU port)", () => {
       expect(evaluationLogic.evaluateRule(rule, context)).toBe(true);
     });
 
+    it("matches email eq case-insensitively (Alice@ vs alice@)", () => {
+      const rule = {
+        attribute: "email",
+        operator: "eq",
+        value: "Alice@acme.com",
+      } as any;
+      expect(
+        evaluationLogic.evaluateRule(rule, { email: "alice@acme.com" }),
+      ).toBe(true);
+    });
+
     it("should handle eq with null attribute", () => {
       const nullContext = { nullable: null };
       const rule = {
