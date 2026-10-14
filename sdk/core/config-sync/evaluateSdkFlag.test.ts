@@ -232,6 +232,39 @@ describe('evaluateSdkFlag (RuleEngine wrapper)', () => {
       ),
     ).toBe(false);
   });
+
+  it('matches Alice@acme.com rule against alice@acme.com context via PII hash normalize', () => {
+    const salt = 'case-salt';
+    const hashed = hashPiiValue('Alice@acme.com', salt);
+    const flag = boolFlag({
+      default_value: false,
+      targeting_rules: [
+        {
+          id: 'r1',
+          kind: 'custom',
+          order_index: 0,
+          conditions: [{ attribute: 'email', operator: 'eq', value: hashed }],
+          variation_id: 'on',
+        },
+      ],
+    });
+    const pii = {
+      piiAttributes: ['email'],
+      piiSalt: salt,
+      piiValueEncoding: PII_VALUE_ENCODING,
+    };
+    expect(
+      evaluateSdkFlag(
+        flag,
+        { kind: 'user', key: 'u1', email: 'alice@acme.com' },
+        {},
+        pii,
+      ),
+    ).toBe(true);
+    expect(hashPiiValue('Alice@acme.com', salt)).toBe(
+      hashPiiValue('alice@acme.com', salt),
+    );
+  });
 });
 
 describe('prepareContextForEvaluator / mapToRecord', () => {
