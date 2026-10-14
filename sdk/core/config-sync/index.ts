@@ -53,7 +53,9 @@ export {
   normalizePiiString,
   hashPiiValue,
   isPiiAttribute,
+  payloadHasExplicitPiiFields,
   piiWireOptionsFromPayload,
+  resolvePiiWireForDelta,
   applyPiiHashToFlatContext,
 } from './piiHash';
 export type { PiiWireOptions } from './piiHash';

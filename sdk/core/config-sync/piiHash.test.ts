@@ -5,7 +5,9 @@ import {
   hashPiiValue,
   isPiiAttribute,
   normalizePiiString,
+  payloadHasExplicitPiiFields,
   piiWireOptionsFromPayload,
+  resolvePiiWireForDelta,
 } from './piiHash';
 
 describe('piiHash (hmac-v1)', () => {
@@ -67,6 +69,51 @@ describe('piiHash (hmac-v1)', () => {
       ).toEqual({
         piiAttributes: ['email', 'phone'],
         piiSalt: 's',
+        piiValueEncoding: PII_VALUE_ENCODING,
+      });
+    });
+  });
+
+  describe('payloadHasExplicitPiiFields / resolvePiiWireForDelta', () => {
+    const prior = {
+      piiAttributes: ['email'],
+      piiSalt: 'old',
+      piiValueEncoding: PII_VALUE_ENCODING,
+    };
+
+    it('detects omitted vs explicit fields', () => {
+      expect(payloadHasExplicitPiiFields({})).toBe(false);
+      expect(payloadHasExplicitPiiFields({ piiSalt: '' })).toBe(true);
+      expect(payloadHasExplicitPiiFields({ piiAttributes: [] })).toBe(true);
+      expect(payloadHasExplicitPiiFields({ piiValueEncoding: 'hmac-v2' })).toBe(
+        true,
+      );
+    });
+
+    it('keeps prior when delta omits PII fields', () => {
+      expect(resolvePiiWireForDelta(prior, {})).toEqual(prior);
+    });
+
+    it('clears when explicit fields are unusable', () => {
+      expect(resolvePiiWireForDelta(prior, { piiSalt: '' })).toBeNull();
+      expect(
+        resolvePiiWireForDelta(prior, {
+          piiSalt: 'x',
+          piiValueEncoding: 'hmac-v2',
+        }),
+      ).toBeNull();
+    });
+
+    it('replaces when explicit fields are usable', () => {
+      expect(
+        resolvePiiWireForDelta(prior, {
+          piiSalt: 'new',
+          piiAttributes: ['phone'],
+          piiValueEncoding: PII_VALUE_ENCODING,
+        }),
+      ).toEqual({
+        piiAttributes: ['phone'],
+        piiSalt: 'new',
         piiValueEncoding: PII_VALUE_ENCODING,
       });
     });

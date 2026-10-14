@@ -364,4 +364,84 @@ describe('RulesStore MAC gate', () => {
     expect(state.piiWire?.piiSalt).toBe('s');
     expect(state.version).toBe(2);
   });
+
+  it('clears PII options when a delta sends an empty salt', () => {
+    let state = createEmptyRulesState();
+    state = reduceRules(
+      state,
+      {
+        ...fullConfig(1, [flag('a')]),
+        piiAttributes: ['email'],
+        piiSalt: 's',
+        piiValueEncoding: 'hmac-v1',
+      },
+      NOW,
+    ).state;
+    state = reduceRules(
+      state,
+      {
+        ...delta(1, 2, [flag('a', true)]),
+        piiSalt: '',
+        piiAttributes: [],
+        piiValueEncoding: 'hmac-v1',
+      },
+      NOW,
+    ).state;
+    expect(state.piiWire).toBeNull();
+    expect(state.version).toBe(2);
+  });
+
+  it('clears PII options when a delta sends an unsupported encoding', () => {
+    let state = createEmptyRulesState();
+    state = reduceRules(
+      state,
+      {
+        ...fullConfig(1, [flag('a')]),
+        piiAttributes: ['email'],
+        piiSalt: 's',
+        piiValueEncoding: 'hmac-v1',
+      },
+      NOW,
+    ).state;
+    state = reduceRules(
+      state,
+      {
+        ...delta(1, 2, [flag('a', true)]),
+        piiSalt: 'new-salt',
+        piiAttributes: ['email'],
+        piiValueEncoding: 'hmac-v2',
+      },
+      NOW,
+    ).state;
+    expect(state.piiWire).toBeNull();
+  });
+
+  it('replaces PII options when a delta sends new valid metadata', () => {
+    let state = createEmptyRulesState();
+    state = reduceRules(
+      state,
+      {
+        ...fullConfig(1, [flag('a')]),
+        piiAttributes: ['email'],
+        piiSalt: 'old-salt',
+        piiValueEncoding: 'hmac-v1',
+      },
+      NOW,
+    ).state;
+    state = reduceRules(
+      state,
+      {
+        ...delta(1, 2, [flag('a', true)]),
+        piiAttributes: ['email', 'phone'],
+        piiSalt: 'new-salt',
+        piiValueEncoding: 'hmac-v1',
+      },
+      NOW,
+    ).state;
+    expect(state.piiWire).toEqual({
+      piiAttributes: ['email', 'phone'],
+      piiSalt: 'new-salt',
+      piiValueEncoding: 'hmac-v1',
+    });
+  });
 });

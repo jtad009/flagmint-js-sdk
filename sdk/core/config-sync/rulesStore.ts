@@ -1,5 +1,6 @@
 import {
   piiWireOptionsFromPayload,
+  resolvePiiWireForDelta,
   type PiiWireOptions,
 } from './piiHash';
 import {
@@ -115,8 +116,9 @@ function applyPatch(state: RulesState, action: DeltaConfigPayload): RulesState {
   for (const flag of action.upserts || []) {
     if (flag?.key) flags.set(flag.key, flag);
   }
-  // Prefer delta PII metadata when present; otherwise keep the previous wire options.
-  const nextPii = piiWireOptionsFromPayload(action) ?? state.piiWire;
+  // Keep prior PII options only when the delta omits all PII fields.
+  // Explicit but unusable fields (empty salt / unknown encoding) clear them.
+  const nextPii = resolvePiiWireForDelta(state.piiWire, action);
   return {
     version: action.toVersion,
     expiresAt: typeof action.expiresAt === 'number' ? action.expiresAt : state.expiresAt,

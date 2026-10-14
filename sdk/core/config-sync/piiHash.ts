@@ -67,6 +67,31 @@ export function isPiiAttribute(
   return false;
 }
 
+/** Payload fields that carry PII wire metadata. */
+export type PiiWirePayloadFields = {
+  piiAttributes?: unknown;
+  piiSalt?: unknown;
+  piiValueEncoding?: unknown;
+};
+
+/**
+ * Whether a payload explicitly includes any PII wire field (vs omitting all).
+ * Used so deltas that omit PII metadata keep the previous options, while
+ * deltas that send unusable fields clear them.
+ *
+ * @param payload Signed fullConfig / delta fields
+ */
+export function payloadHasExplicitPiiFields(
+  payload: PiiWirePayloadFields | null | undefined,
+): boolean {
+  if (!payload) return false;
+  return (
+    payload.piiSalt !== undefined ||
+    payload.piiAttributes !== undefined ||
+    payload.piiValueEncoding !== undefined
+  );
+}
+
 /**
  * Parse PII wire options from a config-sync payload body.
  *
@@ -74,11 +99,7 @@ export function isPiiAttribute(
  * @returns Options when salt + encoding are usable; otherwise null
  */
 export function piiWireOptionsFromPayload(
-  payload: {
-    piiAttributes?: unknown;
-    piiSalt?: unknown;
-    piiValueEncoding?: unknown;
-  } | null | undefined,
+  payload: PiiWirePayloadFields | null | undefined,
 ): PiiWireOptions | null {
   if (!payload) return null;
   const salt = typeof payload.piiSalt === 'string' ? payload.piiSalt : '';
@@ -96,6 +117,23 @@ export function piiWireOptionsFromPayload(
     piiSalt: salt,
     piiValueEncoding: PII_VALUE_ENCODING,
   };
+}
+
+/**
+ * Resolve PII wire options for a delta: keep prior when all PII fields are
+ * absent; otherwise replace with the parsed options (or null if unusable).
+ *
+ * @param previous Current store options
+ * @param action Delta (or similar) payload fields
+ */
+export function resolvePiiWireForDelta(
+  previous: PiiWireOptions | null,
+  action: PiiWirePayloadFields | null | undefined,
+): PiiWireOptions | null {
+  if (!payloadHasExplicitPiiFields(action)) {
+    return previous;
+  }
+  return piiWireOptionsFromPayload(action);
 }
 
 /**
