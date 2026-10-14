@@ -444,4 +444,52 @@ describe('RulesStore MAC gate', () => {
       piiValueEncoding: 'hmac-v1',
     });
   });
+
+  it('merges salt-only delta PII with prior attributes', () => {
+    let state = createEmptyRulesState();
+    state = reduceRules(
+      state,
+      {
+        ...fullConfig(1, [flag('a')]),
+        piiAttributes: ['email'],
+        piiSalt: 'old-salt',
+        piiValueEncoding: 'hmac-v1',
+      },
+      NOW,
+    ).state;
+    state = reduceRules(
+      state,
+      { ...delta(1, 2, [flag('a', true)]), piiSalt: 'new-salt' },
+      NOW,
+    ).state;
+    expect(state.piiWire).toEqual({
+      piiAttributes: ['email'],
+      piiSalt: 'new-salt',
+      piiValueEncoding: 'hmac-v1',
+    });
+  });
+
+  it('merges attrs-only delta PII with prior salt', () => {
+    let state = createEmptyRulesState();
+    state = reduceRules(
+      state,
+      {
+        ...fullConfig(1, [flag('a')]),
+        piiAttributes: ['email'],
+        piiSalt: 'old-salt',
+        piiValueEncoding: 'hmac-v1',
+      },
+      NOW,
+    ).state;
+    state = reduceRules(
+      state,
+      { ...delta(1, 2, [flag('a', true)]), piiAttributes: ['phone'] },
+      NOW,
+    ).state;
+    expect(state.piiWire).toEqual({
+      piiAttributes: ['phone'],
+      piiSalt: 'old-salt',
+      piiValueEncoding: 'hmac-v1',
+    });
+  });
 });

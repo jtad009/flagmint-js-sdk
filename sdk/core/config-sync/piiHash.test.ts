@@ -104,6 +104,24 @@ describe('piiHash (hmac-v1)', () => {
       ).toBeNull();
     });
 
+    it('merges salt-only delta with prior attributes', () => {
+      expect(resolvePiiWireForDelta(prior, { piiSalt: 'new' })).toEqual({
+        piiAttributes: ['email'],
+        piiSalt: 'new',
+        piiValueEncoding: PII_VALUE_ENCODING,
+      });
+    });
+
+    it('merges attrs-only delta with prior salt', () => {
+      expect(
+        resolvePiiWireForDelta(prior, { piiAttributes: ['phone'] }),
+      ).toEqual({
+        piiAttributes: ['phone'],
+        piiSalt: 'old',
+        piiValueEncoding: PII_VALUE_ENCODING,
+      });
+    });
+
     it('replaces when explicit fields are usable', () => {
       expect(
         resolvePiiWireForDelta(prior, {
@@ -136,10 +154,28 @@ describe('piiHash (hmac-v1)', () => {
       expect(out.plan).toBe('pro');
     });
 
-    it('skips already-hashed 64-char hex', () => {
+    it('hashes values that look like 64-char hex (no shape heuristic)', () => {
+      const plaintextHex = 'a'.repeat(64);
+      const out = applyPiiHashToFlatContext({ email: plaintextHex }, opts);
+      expect(out.email).toBe(hashPiiValue(plaintextHex, opts.piiSalt));
+      expect(out.email).not.toBe(plaintextHex);
+    });
+
+    it('hashes hex-looking strings inside arrays', () => {
+      const plaintextHex = 'b'.repeat(64);
+      const out = applyPiiHashToFlatContext({ email: [plaintextHex, 'x'] }, opts);
+      expect(out.email).toEqual([
+        hashPiiValue(plaintextHex, opts.piiSalt),
+        hashPiiValue('x', opts.piiSalt),
+      ]);
+    });
+
+    it('leaves context unchanged when alreadyHashed is set', () => {
       const hashed = hashPiiValue('a@b.com', opts.piiSalt);
-      const out = applyPiiHashToFlatContext({ email: hashed }, opts);
-      expect(out.email).toBe(hashed);
+      const ctx = { email: hashed };
+      expect(applyPiiHashToFlatContext(ctx, opts, { alreadyHashed: true })).toBe(
+        ctx,
+      );
     });
 
     it('is a no-op without options', () => {
