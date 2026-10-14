@@ -5,6 +5,14 @@ All notable changes to the Flagmint JS SDK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [2.2.2-rc.0] — 2026-10-14
+
+### Added
+
+- **PII hash-before-compare (config-sync).** When the signed `fullConfig` / `delta` includes `piiAttributes` + `piiSalt` (`hmac-v1`), local evaluation hashes matching context fields (trim + lowercase → HMAC-SHA256 hex) before rule compare so plaintext emails still match hashed rule values on the wire. Metadata is kept on the rules store and in `RulesCacheSnapshot` for reconnect.
+
 ## [2.2.1] — 2026-10-05
 
 ### Fixed

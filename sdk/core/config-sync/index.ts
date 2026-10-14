@@ -30,6 +30,7 @@ export type {
   DeltasCatchUpPayload,
   FullConfigPayload,
   LeasePayload,
+  PiiWireMetadata,
   RulesCacheSnapshot,
   SdkFlagConfig,
   SdkSegment,
@@ -44,8 +45,18 @@ export {
   evaluateAllSdkFlags,
   coerceType,
   prepareContextForEvaluator,
+  prepareContextForLocalEval,
   mapToRecord,
 } from './evaluateSdkFlag';
+export {
+  PII_VALUE_ENCODING,
+  normalizePiiString,
+  hashPiiValue,
+  isPiiAttribute,
+  piiWireOptionsFromPayload,
+  applyPiiHashToFlatContext,
+} from './piiHash';
+export type { PiiWireOptions } from './piiHash';
 export {
   evaluateRule,
   evaluateKillSwitch,

@@ -679,6 +679,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
             flag,
             this.context as Record<string, unknown>,
             this.rulesStore.getState().segments,
+            this.rulesStore.getState().piiWire,
           ) as FeatureFlags<T>[K]) ?? fallback!;
       }
     } else {
@@ -1209,7 +1210,7 @@ export class FlagClient<T = unknown, C extends Record<string, any> = Record<stri
       state.flags,
       (context ?? this.context) as Record<string, unknown>,
       state.segments,
-      { failClosedDefaultsOnly: failClosed },
+      { failClosedDefaultsOnly: failClosed, pii: state.piiWire },
     );
   }
 

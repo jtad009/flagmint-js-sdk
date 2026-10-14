@@ -47,6 +47,9 @@ export {
   computeCurrentPercentage,
   defaultHash,
   flattenEvaluationContext,
+  prepareContextForLocalEval,
+  hashPiiValue,
+  applyPiiHashToFlatContext,
   stringHash,
   hashPercent,
 } from './sdk/core/config-sync';
@@ -62,4 +65,5 @@ export type {
   DeltasCatchUpPayload,
   ApplyResult,
   AslHandshakeSuccess,
+  PiiWireOptions,
 } from './sdk/core/config-sync';

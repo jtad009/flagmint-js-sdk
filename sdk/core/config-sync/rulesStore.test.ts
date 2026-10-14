@@ -321,4 +321,47 @@ describe('RulesStore MAC gate', () => {
     expect(store.wantsFullConfig(NOW)).toBe(true);
     expect(store.getFailClosedDefault('cached')).toBe(true);
   });
+
+  it('stores PII wire metadata from fullConfig and snapshot', () => {
+    const withPii = {
+      ...fullConfig(1, [flag('a')]),
+      piiAttributes: ['email'],
+      piiSalt: 'client-salt',
+      piiValueEncoding: 'hmac-v1',
+    };
+    const result = reduceRules(createEmptyRulesState(), withPii, NOW);
+    expect(result.ok).toBe(true);
+    expect(result.state.piiWire).toEqual({
+      piiAttributes: ['email'],
+      piiSalt: 'client-salt',
+      piiValueEncoding: 'hmac-v1',
+    });
+
+    const store = new RulesStore();
+    store.applyTrusted(withPii, NOW);
+    const snap = store.toSnapshot();
+    expect(snap.piiSalt).toBe('client-salt');
+    expect(snap.piiAttributes).toEqual(['email']);
+
+    const warm = new RulesStore();
+    warm.hydrateFromSnapshot(snap, NOW);
+    expect(warm.getState().piiWire?.piiSalt).toBe('client-salt');
+  });
+
+  it('keeps prior PII options when a delta omits them', () => {
+    let state = createEmptyRulesState();
+    state = reduceRules(
+      state,
+      {
+        ...fullConfig(1, [flag('a')]),
+        piiAttributes: ['email'],
+        piiSalt: 's',
+        piiValueEncoding: 'hmac-v1',
+      },
+      NOW,
+    ).state;
+    state = reduceRules(state, delta(1, 2, [flag('a', true)]), NOW).state;
+    expect(state.piiWire?.piiSalt).toBe('s');
+    expect(state.version).toBe(2);
+  });
 });

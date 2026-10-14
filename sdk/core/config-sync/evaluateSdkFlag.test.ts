@@ -5,8 +5,10 @@ import {
   evaluateSdkFlag,
   evaluateAllSdkFlags,
   prepareContextForEvaluator,
+  prepareContextForLocalEval,
   mapToRecord,
 } from './evaluateSdkFlag';
+import { hashPiiValue, PII_VALUE_ENCODING } from './piiHash';
 import type { SdkFlagConfig } from './types';
 
 function boolFlag(overrides: Partial<SdkFlagConfig> = {}): SdkFlagConfig {
@@ -192,6 +194,44 @@ describe('evaluateSdkFlag (RuleEngine wrapper)', () => {
     });
     expect(evaluateSdkFlag(flag, { kind: 'user', key: 'u1' }, {})).toBe(true);
   });
+
+  it('hashes plaintext email before compare when pii wire options are set', () => {
+    const salt = 'test-pii-salt';
+    const hashed = hashPiiValue('israel@weseedo.nl', salt);
+    const flag = boolFlag({
+      default_value: false,
+      targeting_rules: [
+        {
+          id: 'r1',
+          kind: 'custom',
+          order_index: 0,
+          conditions: [{ attribute: 'email', operator: 'in', value: [hashed] }],
+          variation_id: 'on',
+        },
+      ],
+    });
+    const pii = {
+      piiAttributes: ['email'],
+      piiSalt: salt,
+      piiValueEncoding: PII_VALUE_ENCODING,
+    };
+    expect(
+      evaluateSdkFlag(
+        flag,
+        { kind: 'user', key: 'u1', email: 'Israel@WeSeeDo.nl' },
+        {},
+        pii,
+      ),
+    ).toBe(true);
+    expect(
+      evaluateSdkFlag(
+        flag,
+        { kind: 'user', key: 'u1', email: 'other@example.com' },
+        {},
+        pii,
+      ),
+    ).toBe(false);
+  });
 });
 
 describe('prepareContextForEvaluator / mapToRecord', () => {
@@ -202,6 +242,20 @@ describe('prepareContextForEvaluator / mapToRecord', () => {
     });
     expect(prepared['user.key']).toBe('u1');
     expect(prepared['organization.tier']).toBe('enterprise');
+  });
+
+  it('prepareContextForLocalEval hashes user.email', () => {
+    const salt = 's';
+    const flat = prepareContextForLocalEval(
+      { kind: 'user', key: 'u1', email: 'A@B.com' },
+      {
+        piiAttributes: ['email'],
+        piiSalt: salt,
+        piiValueEncoding: PII_VALUE_ENCODING,
+      },
+    );
+    expect(flat['user.email']).toBe(hashPiiValue('A@B.com', salt));
+    expect(flat['user.key']).toBe('u1');
   });
 
   it('mapToRecord is ES2018-safe', () => {
