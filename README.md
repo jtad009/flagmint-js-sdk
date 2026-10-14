@@ -162,7 +162,7 @@ transportMode: 'long-polling'   // POST evaluate on an interval
 
 # Connection sharing
 
-Used when the same app is embedded twice on one origin (for example two WeSeeDo iframes in a host page).
+Used when the same app is embedded twice on one origin (for example two iframes in a host page).
 
 - **Leader** performs handshake and holds EventSource.
 - **Followers** receive flag snapshots over `BroadcastChannel` (`flagmint-share:<apiKey>`). Leadership is a `localStorage` lock (`flagmint_share_lock:<apiKey>`).
