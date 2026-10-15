@@ -135,11 +135,15 @@ function applyPatch(state: RulesState, action: DeltaConfigPayload): RulesState {
   const priorHadPiiAttrs =
     (state.piiWire?.piiAttributes.length ?? 0) > 0 || state.piiWireBroken;
   const computedBroken = isPiiWireBroken(action, nextPii, priorHadPiiAttrs);
-  // Usable wire or explicit PII removal clears the break. Incomplete PII deltas
-  // (e.g. encoding-only) must keep a prior break until metadata is usable.
-  const piiWireBroken = nextPii
+  // Clear fail-closed only when:
+  // - explicit `piiAttributes: []` removal, or
+  // - usable options that still list at least one PII attribute.
+  // Salt-only recovery with empty attrs must not unblock a prior broken wire.
+  const recoveredWithRequiredAttrs =
+    !!nextPii && nextPii.piiAttributes.length > 0;
+  const piiWireBroken = isExplicitPiiRequirementCleared(action)
     ? false
-    : isExplicitPiiRequirementCleared(action)
+    : recoveredWithRequiredAttrs
       ? false
       : computedBroken || state.piiWireBroken;
   return {

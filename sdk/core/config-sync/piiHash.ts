@@ -111,6 +111,22 @@ export function piiAttributeKeysFromPayload(
 }
 
 /**
+ * True when `piiAttributes` is present but not a clean list of non-empty strings.
+ * e.g. `[null]`, `['']`, or a non-array — must not count as "remove all PII".
+ *
+ * @param payload Signed fullConfig / delta fields
+ */
+export function hasMalformedPiiAttributes(
+  payload: PiiWirePayloadFields | null | undefined,
+): boolean {
+  if (!payload || payload.piiAttributes === undefined) return false;
+  if (!Array.isArray(payload.piiAttributes)) return true;
+  return payload.piiAttributes.some(
+    (entry) => typeof entry !== 'string' || entry.length === 0,
+  );
+}
+
+/**
  * True when `piiValueEncoding` is present but is not usable `hmac-v1`.
  * Distinguishes omitted encoding (OK — default hmac-v1) from e.g. `123` / `hmac-v2`.
  *
@@ -134,13 +150,14 @@ export function payloadRequiresUsablePiiWire(
 ): boolean {
   if (!payload) return false;
   if (hasExplicitInvalidPiiEncoding(payload)) return true;
+  if (hasMalformedPiiAttributes(payload)) return true;
   if (piiAttributeKeysFromPayload(payload).length > 0) return true;
   return false;
 }
 
 /**
- * True when the payload explicitly clears the PII attribute list (no keys left)
- * without an invalid encoding — hashing is no longer required.
+ * True when the payload explicitly clears the PII attribute list.
+ * Only a literal empty array `[]` counts — `[null]` / `['']` are malformed, not removal.
  *
  * @param payload Signed fullConfig / delta fields
  */
@@ -149,7 +166,7 @@ export function isExplicitPiiRequirementCleared(
 ): boolean {
   if (!payload || payload.piiAttributes === undefined) return false;
   if (!Array.isArray(payload.piiAttributes)) return false;
-  if (piiAttributeKeysFromPayload(payload).length > 0) return false;
+  if (payload.piiAttributes.length !== 0) return false;
   if (hasExplicitInvalidPiiEncoding(payload)) return false;
   return true;
 }
@@ -166,6 +183,7 @@ export function piiWireOptionsFromPayload(
   if (!payload) return null;
   // Explicit non-hmac-v1 (wrong type or wrong string) → unusable, not "omitted".
   if (hasExplicitInvalidPiiEncoding(payload)) return null;
+  if (hasMalformedPiiAttributes(payload)) return null;
   const salt = typeof payload.piiSalt === 'string' ? payload.piiSalt : '';
   if (!salt) return null;
   const attrs = piiAttributeKeysFromPayload(payload);
@@ -180,7 +198,7 @@ export function piiWireOptionsFromPayload(
  * Whether resolved PII options are missing while the payload (or prior state)
  * still requires hashing — local eval must use defaults only.
  *
- * Explicit `piiAttributes: []` (with no invalid encoding) clears the requirement
+ * Explicit `piiAttributes: []` (literal empty array) clears the requirement
  * even if salt is empty — evaluation may proceed without hashing.
  *
  * @param payload Payload that was just applied (full or merged delta fields)
@@ -192,9 +210,10 @@ export function isPiiWireBroken(
   resolved: PiiWireOptions | null,
   previousPriorHadPiiAttrs = false,
 ): boolean {
+  if (hasExplicitInvalidPiiEncoding(payload) || hasMalformedPiiAttributes(payload)) {
+    return true;
+  }
   if (resolved) {
-    // Guard: never treat as usable if encoding was explicitly invalid.
-    if (hasExplicitInvalidPiiEncoding(payload)) return true;
     return false;
   }
   if (isExplicitPiiRequirementCleared(payload)) return false;

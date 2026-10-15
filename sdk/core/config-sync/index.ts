@@ -55,6 +55,7 @@ export {
   isPiiAttribute,
   payloadHasExplicitPiiFields,
   hasExplicitInvalidPiiEncoding,
+  hasMalformedPiiAttributes,
   payloadRequiresUsablePiiWire,
   isExplicitPiiRequirementCleared,
   piiAttributeKeysFromPayload,
