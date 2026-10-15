@@ -1,6 +1,6 @@
 import {
+  isExplicitPiiRequirementCleared,
   isPiiWireBroken,
-  payloadHasExplicitPiiFields,
   piiWireOptionsFromPayload,
   resolvePiiWireForDelta,
   type PiiWireOptions,
@@ -132,13 +132,16 @@ function applyPatch(state: RulesState, action: DeltaConfigPayload): RulesState {
   // Keep prior PII options only when the delta omits all PII fields.
   // Explicit but unusable fields (empty salt / unknown encoding) clear them.
   const nextPii = resolvePiiWireForDelta(state.piiWire, action);
-  const priorHadPiiAttrs = (state.piiWire?.piiAttributes.length ?? 0) > 0;
+  const priorHadPiiAttrs =
+    (state.piiWire?.piiAttributes.length ?? 0) > 0 || state.piiWireBroken;
   const computedBroken = isPiiWireBroken(action, nextPii, priorHadPiiAttrs);
-  // Usable wire clears the break. Omit-all deltas keep a prior break until fullConfig.
+  // Usable wire or explicit PII removal clears the break. Incomplete PII deltas
+  // (e.g. encoding-only) must keep a prior break until metadata is usable.
   const piiWireBroken = nextPii
     ? false
-    : computedBroken ||
-      (state.piiWireBroken && !payloadHasExplicitPiiFields(action));
+    : isExplicitPiiRequirementCleared(action)
+      ? false
+      : computedBroken || state.piiWireBroken;
   return {
     version: action.toVersion,
     expiresAt: typeof action.expiresAt === 'number' ? action.expiresAt : state.expiresAt,
@@ -372,6 +375,8 @@ export class RulesStore {
             piiValueEncoding: pii.piiValueEncoding,
           }
         : {}),
+      // Persist fail-closed even when piiWire is null (unusable salt/encoding).
+      ...(this.state.piiWireBroken ? { piiWireBroken: true } : {}),
     };
   }
 
@@ -382,7 +387,9 @@ export class RulesStore {
     }
     const expired = isConfigPayloadExpired(snapshot.expiresAt, now);
     const piiWire = piiWireOptionsFromPayload(snapshot);
-    const piiWireBroken = isPiiWireBroken(snapshot, piiWire, false);
+    const piiWireBroken =
+      snapshot.piiWireBroken === true ||
+      isPiiWireBroken(snapshot, piiWire, false);
     this.state = {
       version: snapshot.version,
       expiresAt: snapshot.expiresAt,

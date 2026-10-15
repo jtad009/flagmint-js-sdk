@@ -111,6 +111,19 @@ export function piiAttributeKeysFromPayload(
 }
 
 /**
+ * True when `piiValueEncoding` is present but is not usable `hmac-v1`.
+ * Distinguishes omitted encoding (OK — default hmac-v1) from e.g. `123` / `hmac-v2`.
+ *
+ * @param payload Signed fullConfig / delta fields
+ */
+export function hasExplicitInvalidPiiEncoding(
+  payload: PiiWirePayloadFields | null | undefined,
+): boolean {
+  if (!payload || payload.piiValueEncoding === undefined) return false;
+  return payload.piiValueEncoding !== PII_VALUE_ENCODING;
+}
+
+/**
  * True when the payload claims PII hashing is in play and the client must have
  * usable salt + `hmac-v1` encoding (otherwise local eval must fail closed).
  *
@@ -120,15 +133,25 @@ export function payloadRequiresUsablePiiWire(
   payload: PiiWirePayloadFields | null | undefined,
 ): boolean {
   if (!payload) return false;
+  if (hasExplicitInvalidPiiEncoding(payload)) return true;
   if (piiAttributeKeysFromPayload(payload).length > 0) return true;
-  if (
-    typeof payload.piiValueEncoding === 'string' &&
-    payload.piiValueEncoding.length > 0 &&
-    payload.piiValueEncoding !== PII_VALUE_ENCODING
-  ) {
-    return true;
-  }
   return false;
+}
+
+/**
+ * True when the payload explicitly clears the PII attribute list (no keys left)
+ * without an invalid encoding — hashing is no longer required.
+ *
+ * @param payload Signed fullConfig / delta fields
+ */
+export function isExplicitPiiRequirementCleared(
+  payload: PiiWirePayloadFields | null | undefined,
+): boolean {
+  if (!payload || payload.piiAttributes === undefined) return false;
+  if (!Array.isArray(payload.piiAttributes)) return false;
+  if (piiAttributeKeysFromPayload(payload).length > 0) return false;
+  if (hasExplicitInvalidPiiEncoding(payload)) return false;
+  return true;
 }
 
 /**
@@ -141,13 +164,10 @@ export function piiWireOptionsFromPayload(
   payload: PiiWirePayloadFields | null | undefined,
 ): PiiWireOptions | null {
   if (!payload) return null;
+  // Explicit non-hmac-v1 (wrong type or wrong string) → unusable, not "omitted".
+  if (hasExplicitInvalidPiiEncoding(payload)) return null;
   const salt = typeof payload.piiSalt === 'string' ? payload.piiSalt : '';
   if (!salt) return null;
-  const encoding =
-    typeof payload.piiValueEncoding === 'string'
-      ? payload.piiValueEncoding
-      : PII_VALUE_ENCODING;
-  if (encoding !== PII_VALUE_ENCODING) return null;
   const attrs = piiAttributeKeysFromPayload(payload);
   return {
     piiAttributes: attrs,
@@ -160,6 +180,9 @@ export function piiWireOptionsFromPayload(
  * Whether resolved PII options are missing while the payload (or prior state)
  * still requires hashing — local eval must use defaults only.
  *
+ * Explicit `piiAttributes: []` (with no invalid encoding) clears the requirement
+ * even if salt is empty — evaluation may proceed without hashing.
+ *
  * @param payload Payload that was just applied (full or merged delta fields)
  * @param resolved Result of {@link piiWireOptionsFromPayload} / delta resolve
  * @param previousPriorHadPiiAttrs Whether the store previously had PII attribute keys
@@ -169,9 +192,14 @@ export function isPiiWireBroken(
   resolved: PiiWireOptions | null,
   previousPriorHadPiiAttrs = false,
 ): boolean {
-  if (resolved) return false;
+  if (resolved) {
+    // Guard: never treat as usable if encoding was explicitly invalid.
+    if (hasExplicitInvalidPiiEncoding(payload)) return true;
+    return false;
+  }
+  if (isExplicitPiiRequirementCleared(payload)) return false;
   if (payloadRequiresUsablePiiWire(payload)) return true;
-  // Explicit clear of salt/encoding while we still had PII attrs → broken
+  // Explicit salt/encoding wipe while we still had PII attrs → broken
   if (previousPriorHadPiiAttrs && payloadHasExplicitPiiFields(payload)) {
     return true;
   }

@@ -387,7 +387,7 @@ describe('RulesStore MAC gate', () => {
     expect(state.version).toBe(2);
   });
 
-  it('clears PII options when a delta sends an empty salt', () => {
+  it('clears PII requirement when a delta sends empty attrs (explicit removal)', () => {
     let state = createEmptyRulesState();
     state = reduceRules(
       state,
@@ -410,9 +410,57 @@ describe('RulesStore MAC gate', () => {
       NOW,
     ).state;
     expect(state.piiWire).toBeNull();
+    expect(state.piiWireBroken).toBe(false);
+    expect(state.ready).toBe(true);
+    expect(state.version).toBe(2);
+  });
+
+  it('keeps fail-closed after an incomplete PII delta', () => {
+    let state = createEmptyRulesState();
+    state = reduceRules(
+      state,
+      {
+        ...fullConfig(1, [flag('a')]),
+        piiAttributes: ['email'],
+        piiSalt: '',
+        piiValueEncoding: 'hmac-v1',
+      },
+      NOW,
+    ).state;
+    expect(state.piiWireBroken).toBe(true);
+
+    state = reduceRules(
+      state,
+      {
+        ...delta(1, 2, [flag('a', true)]),
+        piiValueEncoding: 'hmac-v1',
+      },
+      NOW,
+    ).state;
+    expect(state.piiWire).toBeNull();
     expect(state.piiWireBroken).toBe(true);
     expect(state.ready).toBe(false);
-    expect(state.version).toBe(2);
+  });
+
+  it('persists piiWireBroken in snapshots for offline hydrate', () => {
+    const broken = {
+      ...fullConfig(1, [flag('a')]),
+      piiAttributes: ['email'],
+      piiSalt: '',
+      piiValueEncoding: 'hmac-v1',
+    };
+    const store = new RulesStore();
+    store.applyTrusted(broken, NOW);
+    expect(store.isReady(NOW)).toBe(false);
+
+    const snap = store.toSnapshot();
+    expect(snap.piiWireBroken).toBe(true);
+    expect(snap.piiSalt).toBeUndefined();
+
+    const warm = new RulesStore();
+    warm.hydrateFromSnapshot(snap, NOW);
+    expect(warm.getState().piiWireBroken).toBe(true);
+    expect(warm.isReady(NOW)).toBe(false);
   });
 
   it('clears PII options when a delta sends an unsupported encoding', () => {
