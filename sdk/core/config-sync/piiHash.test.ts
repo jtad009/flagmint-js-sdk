@@ -4,8 +4,10 @@ import {
   applyPiiHashToFlatContext,
   hashPiiValue,
   isPiiAttribute,
+  isPiiWireBroken,
   normalizePiiString,
   payloadHasExplicitPiiFields,
+  payloadRequiresUsablePiiWire,
   piiWireOptionsFromPayload,
   resolvePiiWireForDelta,
 } from './piiHash';
@@ -44,6 +46,39 @@ describe('piiHash (hmac-v1)', () => {
       expect(isPiiAttribute('email', ['email'])).toBe(true);
       expect(isPiiAttribute('user.email', ['email'])).toBe(true);
       expect(isPiiAttribute('plan', ['email'])).toBe(false);
+    });
+  });
+
+  describe('payloadRequiresUsablePiiWire / isPiiWireBroken', () => {
+    it('requires usable wire when PII attrs are listed', () => {
+      expect(payloadRequiresUsablePiiWire({ piiAttributes: ['email'] })).toBe(
+        true,
+      );
+      expect(payloadRequiresUsablePiiWire({ piiAttributes: [] })).toBe(false);
+      expect(
+        payloadRequiresUsablePiiWire({ piiValueEncoding: 'hmac-v2' }),
+      ).toBe(true);
+    });
+
+    it('marks broken when required but unresolved', () => {
+      expect(
+        isPiiWireBroken({ piiAttributes: ['email'] }, null, false),
+      ).toBe(true);
+      expect(
+        isPiiWireBroken(
+          {
+            piiSalt: 's',
+            piiAttributes: ['email'],
+            piiValueEncoding: PII_VALUE_ENCODING,
+          },
+          {
+            piiSalt: 's',
+            piiAttributes: ['email'],
+            piiValueEncoding: PII_VALUE_ENCODING,
+          },
+          false,
+        ),
+      ).toBe(false);
     });
   });
 

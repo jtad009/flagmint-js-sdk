@@ -331,6 +331,8 @@ describe('RulesStore MAC gate', () => {
     };
     const result = reduceRules(createEmptyRulesState(), withPii, NOW);
     expect(result.ok).toBe(true);
+    expect(result.state.piiWireBroken).toBe(false);
+    expect(result.state.ready).toBe(true);
     expect(result.state.piiWire).toEqual({
       piiAttributes: ['email'],
       piiSalt: 'client-salt',
@@ -346,6 +348,26 @@ describe('RulesStore MAC gate', () => {
     const warm = new RulesStore();
     warm.hydrateFromSnapshot(snap, NOW);
     expect(warm.getState().piiWire?.piiSalt).toBe('client-salt');
+    expect(warm.isReady(NOW)).toBe(true);
+  });
+
+  it('fails closed when fullConfig lists PII attrs without a usable salt', () => {
+    const broken = {
+      ...fullConfig(1, [flag('a')]),
+      piiAttributes: ['email'],
+      piiSalt: '',
+      piiValueEncoding: 'hmac-v1',
+    };
+    const result = reduceRules(createEmptyRulesState(), broken, NOW);
+    expect(result.ok).toBe(true);
+    expect(result.state.piiWire).toBeNull();
+    expect(result.state.piiWireBroken).toBe(true);
+    expect(result.state.ready).toBe(false);
+    expect(result.state.needsFullConfig).toBe(true);
+
+    const store = new RulesStore();
+    store.applyTrusted(broken, NOW);
+    expect(store.isReady(NOW)).toBe(false);
   });
 
   it('keeps prior PII options when a delta omits them', () => {
@@ -388,6 +410,8 @@ describe('RulesStore MAC gate', () => {
       NOW,
     ).state;
     expect(state.piiWire).toBeNull();
+    expect(state.piiWireBroken).toBe(true);
+    expect(state.ready).toBe(false);
     expect(state.version).toBe(2);
   });
 
@@ -414,6 +438,8 @@ describe('RulesStore MAC gate', () => {
       NOW,
     ).state;
     expect(state.piiWire).toBeNull();
+    expect(state.piiWireBroken).toBe(true);
+    expect(state.ready).toBe(false);
   });
 
   it('replaces PII options when a delta sends new valid metadata', () => {
