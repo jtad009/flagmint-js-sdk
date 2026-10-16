@@ -54,7 +54,13 @@ export {
   hashPiiValue,
   isPiiAttribute,
   payloadHasExplicitPiiFields,
+  hasExplicitInvalidPiiEncoding,
+  hasMalformedPiiAttributes,
+  payloadRequiresUsablePiiWire,
+  isExplicitPiiRequirementCleared,
+  piiAttributeKeysFromPayload,
   piiWireOptionsFromPayload,
+  isPiiWireBroken,
   resolvePiiWireForDelta,
   applyPiiHashToFlatContext,
 } from './piiHash';

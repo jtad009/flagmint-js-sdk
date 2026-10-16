@@ -1,4 +1,6 @@
 import {
+  isExplicitPiiRequirementCleared,
+  isPiiWireBroken,
   piiWireOptionsFromPayload,
   resolvePiiWireForDelta,
   type PiiWireOptions,
@@ -29,6 +31,11 @@ export type RulesState = {
   needsFullConfig: boolean;
   /** PII hash options from the last fullConfig/delta (null when absent). */
   piiWire: PiiWireOptions | null;
+  /**
+   * True when hashed PII rules are expected but salt/encoding is unusable.
+   * Fail closed (defaults only) until a good fullConfig arrives.
+   */
+  piiWireBroken: boolean;
 };
 
 export type ApplyResult =
@@ -48,6 +55,7 @@ export function createEmptyRulesState(): RulesState {
     ready: false,
     needsFullConfig: true,
     piiWire: null,
+    piiWireBroken: false,
   };
 }
 
@@ -66,6 +74,7 @@ function cloneState(state: RulesState): RulesState {
           piiValueEncoding: state.piiWire.piiValueEncoding,
         }
       : null,
+    piiWireBroken: state.piiWireBroken,
   };
 }
 
@@ -97,14 +106,18 @@ function hydrateFromFull(action: FullConfigPayload): RulesState {
   for (const flag of action.flags || []) {
     if (flag?.key) flags.set(flag.key, flag);
   }
+  const piiWire = piiWireOptionsFromPayload(action);
+  const piiWireBroken = isPiiWireBroken(action, piiWire, false);
   return {
     version: action.version,
     expiresAt: action.expiresAt,
     flags,
     segments: segmentsFromRecord(action.segments),
-    ready: true,
-    needsFullConfig: false,
-    piiWire: piiWireOptionsFromPayload(action),
+    // Usable rules, but PII metadata must be valid when hashing is required.
+    ready: !piiWireBroken,
+    needsFullConfig: piiWireBroken,
+    piiWire,
+    piiWireBroken,
   };
 }
 
@@ -119,14 +132,29 @@ function applyPatch(state: RulesState, action: DeltaConfigPayload): RulesState {
   // Keep prior PII options only when the delta omits all PII fields.
   // Explicit but unusable fields (empty salt / unknown encoding) clear them.
   const nextPii = resolvePiiWireForDelta(state.piiWire, action);
+  const priorHadPiiAttrs =
+    (state.piiWire?.piiAttributes.length ?? 0) > 0 || state.piiWireBroken;
+  const computedBroken = isPiiWireBroken(action, nextPii, priorHadPiiAttrs);
+  // Clear fail-closed only when:
+  // - explicit `piiAttributes: []` removal, or
+  // - usable options that still list at least one PII attribute.
+  // Salt-only recovery with empty attrs must not unblock a prior broken wire.
+  const recoveredWithRequiredAttrs =
+    !!nextPii && nextPii.piiAttributes.length > 0;
+  const piiWireBroken = isExplicitPiiRequirementCleared(action)
+    ? false
+    : recoveredWithRequiredAttrs
+      ? false
+      : computedBroken || state.piiWireBroken;
   return {
     version: action.toVersion,
     expiresAt: typeof action.expiresAt === 'number' ? action.expiresAt : state.expiresAt,
     flags,
     segments: applySegmentUpserts(state.segments, action.segments),
-    ready: true,
-    needsFullConfig: false,
+    ready: !piiWireBroken,
+    needsFullConfig: piiWireBroken,
     piiWire: nextPii,
+    piiWireBroken,
   };
 }
 
@@ -158,9 +186,11 @@ export function reduceRules(
           ...cloneState(state),
           version: state.version,
           expiresAt: action.expiresAt,
-          ready: true,
+          ready: !state.piiWireBroken,
           needsFullConfig:
-            state.flags.size === 0 || versionMismatch
+            state.piiWireBroken ||
+            state.flags.size === 0 ||
+            versionMismatch
               ? true
               : state.needsFullConfig,
         },
@@ -221,8 +251,8 @@ export function reduceRules(
           version: action.toVersion,
           expiresAt:
             typeof action.expiresAt === 'number' ? action.expiresAt : current.expiresAt,
-          ready: true,
-          needsFullConfig: false,
+          ready: !current.piiWireBroken,
+          needsFullConfig: current.piiWireBroken,
         },
       };
     }
@@ -256,9 +286,11 @@ export class RulesStore {
   }
 
   /**
-   * Fail-closed readiness: lease not expired and store marked ready.
+   * Fail-closed readiness: lease not expired, store marked ready, and PII
+   * wire metadata usable when hashing is required.
    */
   isReady(now: number = Date.now()): boolean {
+    if (this.state.piiWireBroken) return false;
     if (!this.state.ready) return false;
     if (!this.state.expiresAt) return false;
     return !isConfigPayloadExpired(this.state.expiresAt, now);
@@ -347,6 +379,8 @@ export class RulesStore {
             piiValueEncoding: pii.piiValueEncoding,
           }
         : {}),
+      // Persist fail-closed even when piiWire is null (unusable salt/encoding).
+      ...(this.state.piiWireBroken ? { piiWireBroken: true } : {}),
     };
   }
 
@@ -356,14 +390,19 @@ export class RulesStore {
       if (flag?.key) flags.set(flag.key, flag);
     }
     const expired = isConfigPayloadExpired(snapshot.expiresAt, now);
+    const piiWire = piiWireOptionsFromPayload(snapshot);
+    const piiWireBroken =
+      snapshot.piiWireBroken === true ||
+      isPiiWireBroken(snapshot, piiWire, false);
     this.state = {
       version: snapshot.version,
       expiresAt: snapshot.expiresAt,
       flags,
       segments: segmentsFromRecord(snapshot.segments),
-      ready: !expired && flags.size > 0,
-      needsFullConfig: expired || flags.size === 0,
-      piiWire: piiWireOptionsFromPayload(snapshot),
+      ready: !expired && flags.size > 0 && !piiWireBroken,
+      needsFullConfig: expired || flags.size === 0 || piiWireBroken,
+      piiWire,
+      piiWireBroken,
     };
   }
 }

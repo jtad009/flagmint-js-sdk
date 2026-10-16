@@ -86,4 +86,9 @@ export type RulesCacheSnapshot = {
   piiAttributes?: string[];
   piiSalt?: string;
   piiValueEncoding?: string;
+  /**
+   * When true, hydrate must stay fail-closed even if salt/attrs were omitted
+   * from the snapshot (broken wire with `piiWire === null`).
+   */
+  piiWireBroken?: boolean;
 };

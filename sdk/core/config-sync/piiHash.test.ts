@@ -3,9 +3,14 @@ import {
   PII_VALUE_ENCODING,
   applyPiiHashToFlatContext,
   hashPiiValue,
+  hasExplicitInvalidPiiEncoding,
+  hasMalformedPiiAttributes,
+  isExplicitPiiRequirementCleared,
   isPiiAttribute,
+  isPiiWireBroken,
   normalizePiiString,
   payloadHasExplicitPiiFields,
+  payloadRequiresUsablePiiWire,
   piiWireOptionsFromPayload,
   resolvePiiWireForDelta,
 } from './piiHash';
@@ -47,6 +52,112 @@ describe('piiHash (hmac-v1)', () => {
     });
   });
 
+  describe('payloadRequiresUsablePiiWire / isPiiWireBroken', () => {
+    it('requires usable wire when PII attrs are listed', () => {
+      expect(payloadRequiresUsablePiiWire({ piiAttributes: ['email'] })).toBe(
+        true,
+      );
+      expect(payloadRequiresUsablePiiWire({ piiAttributes: [] })).toBe(false);
+      expect(
+        payloadRequiresUsablePiiWire({ piiValueEncoding: 'hmac-v2' }),
+      ).toBe(true);
+      expect(payloadRequiresUsablePiiWire({ piiValueEncoding: 123 })).toBe(
+        true,
+      );
+    });
+
+    it('detects explicit invalid encoding vs omitted', () => {
+      expect(hasExplicitInvalidPiiEncoding({})).toBe(false);
+      expect(hasExplicitInvalidPiiEncoding({ piiValueEncoding: undefined })).toBe(
+        false,
+      );
+      expect(
+        hasExplicitInvalidPiiEncoding({ piiValueEncoding: PII_VALUE_ENCODING }),
+      ).toBe(false);
+      expect(hasExplicitInvalidPiiEncoding({ piiValueEncoding: 123 })).toBe(
+        true,
+      );
+      expect(hasExplicitInvalidPiiEncoding({ piiValueEncoding: 'hmac-v2' })).toBe(
+        true,
+      );
+    });
+
+    it('treats only a literal empty piiAttributes array as clearing', () => {
+      expect(
+        isExplicitPiiRequirementCleared({
+          piiAttributes: [],
+          piiSalt: '',
+          piiValueEncoding: PII_VALUE_ENCODING,
+        }),
+      ).toBe(true);
+      expect(
+        isExplicitPiiRequirementCleared({
+          piiAttributes: [null],
+          piiSalt: '',
+        }),
+      ).toBe(false);
+      expect(hasMalformedPiiAttributes({ piiAttributes: [null] })).toBe(true);
+      expect(hasMalformedPiiAttributes({ piiAttributes: [''] })).toBe(true);
+      expect(hasMalformedPiiAttributes({ piiAttributes: ['email'] })).toBe(
+        false,
+      );
+      expect(
+        isPiiWireBroken(
+          {
+            piiAttributes: [],
+            piiSalt: '',
+            piiValueEncoding: PII_VALUE_ENCODING,
+          },
+          null,
+          true,
+        ),
+      ).toBe(false);
+      expect(
+        isPiiWireBroken({ piiAttributes: [null], piiSalt: 's' }, null, true),
+      ).toBe(true);
+    });
+
+    it('marks broken when required but unresolved', () => {
+      expect(
+        isPiiWireBroken({ piiAttributes: ['email'] }, null, false),
+      ).toBe(true);
+      expect(
+        isPiiWireBroken(
+          {
+            piiSalt: 's',
+            piiAttributes: ['email'],
+            piiValueEncoding: PII_VALUE_ENCODING,
+          },
+          {
+            piiSalt: 's',
+            piiAttributes: ['email'],
+            piiValueEncoding: PII_VALUE_ENCODING,
+          },
+          false,
+        ),
+      ).toBe(false);
+    });
+
+    it('rejects resolved options when encoding was explicitly invalid', () => {
+      const bogusResolved = {
+        piiSalt: 's',
+        piiAttributes: ['email'],
+        piiValueEncoding: PII_VALUE_ENCODING,
+      };
+      expect(
+        isPiiWireBroken(
+          {
+            piiSalt: 's',
+            piiAttributes: ['email'],
+            piiValueEncoding: 123,
+          },
+          bogusResolved,
+          false,
+        ),
+      ).toBe(true);
+    });
+  });
+
   describe('piiWireOptionsFromPayload', () => {
     it('returns null without salt or wrong encoding', () => {
       expect(piiWireOptionsFromPayload({ piiAttributes: ['email'] })).toBeNull();
@@ -59,18 +170,58 @@ describe('piiHash (hmac-v1)', () => {
       ).toBeNull();
     });
 
+    it('returns null for non-string encoding even with valid salt and attrs', () => {
+      expect(
+        piiWireOptionsFromPayload({
+          piiSalt: 's',
+          piiAttributes: ['email'],
+          piiValueEncoding: 123,
+        }),
+      ).toBeNull();
+    });
+
+    it('defaults omitted encoding to hmac-v1', () => {
+      expect(
+        piiWireOptionsFromPayload({
+          piiSalt: 's',
+          piiAttributes: ['email'],
+        }),
+      ).toEqual({
+        piiAttributes: ['email'],
+        piiSalt: 's',
+        piiValueEncoding: PII_VALUE_ENCODING,
+      });
+    });
+
     it('parses hmac-v1 options', () => {
       expect(
         piiWireOptionsFromPayload({
           piiSalt: 's',
           piiValueEncoding: PII_VALUE_ENCODING,
-          piiAttributes: ['email', 1, 'phone'],
+          piiAttributes: ['email', 'phone'],
         }),
       ).toEqual({
         piiAttributes: ['email', 'phone'],
         piiSalt: 's',
         piiValueEncoding: PII_VALUE_ENCODING,
       });
+    });
+
+    it('rejects malformed piiAttributes lists (does not filter to empty)', () => {
+      expect(
+        piiWireOptionsFromPayload({
+          piiSalt: 's',
+          piiAttributes: [null],
+          piiValueEncoding: PII_VALUE_ENCODING,
+        }),
+      ).toBeNull();
+      expect(
+        piiWireOptionsFromPayload({
+          piiSalt: 's',
+          piiAttributes: ['email', 1],
+          piiValueEncoding: PII_VALUE_ENCODING,
+        }),
+      ).toBeNull();
     });
   });
 

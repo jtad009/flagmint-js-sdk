@@ -331,6 +331,8 @@ describe('RulesStore MAC gate', () => {
     };
     const result = reduceRules(createEmptyRulesState(), withPii, NOW);
     expect(result.ok).toBe(true);
+    expect(result.state.piiWireBroken).toBe(false);
+    expect(result.state.ready).toBe(true);
     expect(result.state.piiWire).toEqual({
       piiAttributes: ['email'],
       piiSalt: 'client-salt',
@@ -346,6 +348,26 @@ describe('RulesStore MAC gate', () => {
     const warm = new RulesStore();
     warm.hydrateFromSnapshot(snap, NOW);
     expect(warm.getState().piiWire?.piiSalt).toBe('client-salt');
+    expect(warm.isReady(NOW)).toBe(true);
+  });
+
+  it('fails closed when fullConfig lists PII attrs without a usable salt', () => {
+    const broken = {
+      ...fullConfig(1, [flag('a')]),
+      piiAttributes: ['email'],
+      piiSalt: '',
+      piiValueEncoding: 'hmac-v1',
+    };
+    const result = reduceRules(createEmptyRulesState(), broken, NOW);
+    expect(result.ok).toBe(true);
+    expect(result.state.piiWire).toBeNull();
+    expect(result.state.piiWireBroken).toBe(true);
+    expect(result.state.ready).toBe(false);
+    expect(result.state.needsFullConfig).toBe(true);
+
+    const store = new RulesStore();
+    store.applyTrusted(broken, NOW);
+    expect(store.isReady(NOW)).toBe(false);
   });
 
   it('keeps prior PII options when a delta omits them', () => {
@@ -365,7 +387,7 @@ describe('RulesStore MAC gate', () => {
     expect(state.version).toBe(2);
   });
 
-  it('clears PII options when a delta sends an empty salt', () => {
+  it('clears PII requirement when a delta sends empty attrs (explicit removal)', () => {
     let state = createEmptyRulesState();
     state = reduceRules(
       state,
@@ -388,7 +410,125 @@ describe('RulesStore MAC gate', () => {
       NOW,
     ).state;
     expect(state.piiWire).toBeNull();
+    expect(state.piiWireBroken).toBe(false);
+    expect(state.ready).toBe(true);
     expect(state.version).toBe(2);
+  });
+
+  it('keeps fail-closed after an incomplete PII delta', () => {
+    let state = createEmptyRulesState();
+    state = reduceRules(
+      state,
+      {
+        ...fullConfig(1, [flag('a')]),
+        piiAttributes: ['email'],
+        piiSalt: '',
+        piiValueEncoding: 'hmac-v1',
+      },
+      NOW,
+    ).state;
+    expect(state.piiWireBroken).toBe(true);
+
+    state = reduceRules(
+      state,
+      {
+        ...delta(1, 2, [flag('a', true)]),
+        piiValueEncoding: 'hmac-v1',
+      },
+      NOW,
+    ).state;
+    expect(state.piiWire).toBeNull();
+    expect(state.piiWireBroken).toBe(true);
+    expect(state.ready).toBe(false);
+  });
+
+  it('keeps fail-closed after a salt-only delta that lacks PII attributes', () => {
+    let state = createEmptyRulesState();
+    state = reduceRules(
+      state,
+      {
+        ...fullConfig(1, [flag('a')]),
+        piiAttributes: ['email'],
+        piiSalt: '',
+        piiValueEncoding: 'hmac-v1',
+      },
+      NOW,
+    ).state;
+    expect(state.piiWireBroken).toBe(true);
+
+    state = reduceRules(
+      state,
+      {
+        ...delta(1, 2, [flag('a', true)]),
+        piiSalt: 'recovered-salt',
+      },
+      NOW,
+    ).state;
+    // Salt alone with no prior/attrs must not mark ready without hashing email.
+    expect(state.piiWireBroken).toBe(true);
+    expect(state.ready).toBe(false);
+
+    state = reduceRules(
+      state,
+      {
+        ...delta(2, 3, [flag('a', false)]),
+        piiAttributes: ['email'],
+        piiSalt: 'recovered-salt',
+        piiValueEncoding: 'hmac-v1',
+      },
+      NOW,
+    ).state;
+    expect(state.piiWireBroken).toBe(false);
+    expect(state.piiWire?.piiAttributes).toEqual(['email']);
+    expect(state.ready).toBe(true);
+  });
+
+  it('does not treat malformed piiAttributes as PII removal', () => {
+    let state = createEmptyRulesState();
+    state = reduceRules(
+      state,
+      {
+        ...fullConfig(1, [flag('a')]),
+        piiAttributes: ['email'],
+        piiSalt: 's',
+        piiValueEncoding: 'hmac-v1',
+      },
+      NOW,
+    ).state;
+    state = reduceRules(
+      state,
+      {
+        ...delta(1, 2, [flag('a', true)]),
+        // Wire can deliver null entries; typed as string[] at the boundary.
+        piiAttributes: [null] as unknown as string[],
+        piiSalt: 's',
+        piiValueEncoding: 'hmac-v1',
+      },
+      NOW,
+    ).state;
+    expect(state.piiWireBroken).toBe(true);
+    expect(state.ready).toBe(false);
+  });
+
+  it('persists piiWireBroken in snapshots for offline hydrate', () => {
+    const broken = {
+      ...fullConfig(1, [flag('a')]),
+      piiAttributes: ['email'],
+      piiSalt: '',
+      piiValueEncoding: 'hmac-v1',
+    };
+    const store = new RulesStore();
+    store.applyTrusted(broken, NOW);
+    expect(store.isReady(NOW)).toBe(false);
+
+    const snap = store.toSnapshot();
+    expect(snap.piiWireBroken).toBe(true);
+    expect(snap.piiSalt).toBeUndefined();
+
+    const warm = new RulesStore();
+    warm.hydrateFromSnapshot(snap, NOW);
+    expect(warm.getState().piiWireBroken).toBe(true);
+    expect(warm.isReady(NOW)).toBe(false);
   });
 
   it('clears PII options when a delta sends an unsupported encoding', () => {
@@ -414,6 +554,8 @@ describe('RulesStore MAC gate', () => {
       NOW,
     ).state;
     expect(state.piiWire).toBeNull();
+    expect(state.piiWireBroken).toBe(true);
+    expect(state.ready).toBe(false);
   });
 
   it('replaces PII options when a delta sends new valid metadata', () => {
